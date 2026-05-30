@@ -1,31 +1,61 @@
-name: Atualizar trades.json
+name: Diagnóstico completo de endpoints
 
 on:
-  schedule:
-    - cron: '0 */6 * * *'   # a cada 6 horas
   workflow_dispatch:
 
 jobs:
-  update:
+  check:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-      - name: Instalar dependências
-        run: npm install node-fetch@2
-      - name: Buscar trades da Open API
+      - name: Testar endpoints da Open API
         env:
-          CTRADER_ACCESS_TOKEN: ${{ secrets.CTRADER_ACCESS_TOKEN }}
-          CTRADER_ACCOUNT_ID: ${{ secrets.CTRADER_ACCOUNT_ID }}
-        run: node update-trades.js
-      - name: Commit e push do trades.json
+          TOKEN: ${{ secrets.CTRADER_ACCESS_TOKEN }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add trades.json
-          git diff --staged --quiet || git commit -m "Atualiza trades.json [automático]"
-          git push
+          echo "🔑 Token: ${TOKEN:0:10}..."
+          FROM=$(date -d '6 months ago' -u +"%Y-%m-%dT%H:%M:%SZ")
+          TO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          PARAMS="from=${FROM}&to=${TO}&limit=3"
+
+          # Lista de domínios a testar
+          DOMAINS=(
+            "https://openapi.ctrader.com"
+            "https://api.ct.fpmarkets.com"
+            "https://fpmarkets.ctraderapi.com"
+            "https://demo.ctraderapi.com"
+          )
+
+          # Endpoints possíveis para trades (com accountId)
+          ENDPOINTS=(
+            "/v2/accounts/45897831/trades"
+            "/v2/accounts/1077772/trades"
+            "/v1/accounts/45897831/trades"
+            "/v1/accounts/1077772/trades"
+            "/v2/trades/45897831"
+            "/v2/trades?accountId=45897831"
+            "/v2/accounts/45897831/history"
+            "/v1/accounts/45897831/history"
+            "/v2/accounts/45897831/orders"
+            "/v2/accounts/45897831/positions"
+          )
+
+          echo "🔍 Testando combinações..."
+          for domain in "${DOMAINS[@]}"; do
+            for endpoint in "${ENDPOINTS[@]}"; do
+              URL="${domain}${endpoint}?${PARAMS}"
+              echo "🌐 ${URL}"
+              RESPONSE=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer ${TOKEN}" "${URL}" 2>&1)
+              HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+              BODY=$(echo "$RESPONSE" | sed '$d')
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "   ✅ SUCESSO (HTTP 200)"
+                echo "$BODY" | head -c 500
+                echo ""
+                echo "🎯 ENDPOINT CORRETO: $URL"
+                exit 0
+              else
+                echo "   ❌ HTTP $HTTP_CODE"
+              fi
+            done
+          done
+          echo "❌ Nenhum endpoint funcionou."
+          exit 1
