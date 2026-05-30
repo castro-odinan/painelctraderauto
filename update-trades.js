@@ -5,8 +5,12 @@ const path = require('path');
 const ACCESS_TOKEN = process.env.CTRADER_ACCESS_TOKEN;
 const ACCOUNT_ID = process.env.CTRADER_ACCOUNT_ID; // 1077772
 
-// Apenas a base oficial da Open API (produção/sandbox)
-const BASE = 'https://openapi.ctrader.com';
+// Bases específicas para FP Markets (demo e possíveis mirrors)
+const BASES = [
+  'https://api.ct.fpmarkets.com',
+  'https://api.fpmarkets.com',
+  'https://demo.ctraderapi.com'
+];
 
 async function tryRequest(url) {
   console.log(`🔗 Tentando: ${url}`);
@@ -39,37 +43,31 @@ async function getTradeHistory() {
   from.setMonth(from.getMonth() - 6);
   const params = `from=${from.toISOString()}&to=${to.toISOString()}&limit=1000`;
 
-  // 1. Tentar obter trades diretamente com o accountId
-  const directUrls = [
-    `${BASE}/v2/accounts/${ACCOUNT_ID}/trades?${params}`,
-    `${BASE}/v2/accounts/${ACCOUNT_ID}/history?${params}`,
-    `${BASE}/v2/trades/${ACCOUNT_ID}?${params}`,
-    `${BASE}/v2/trades?accountId=${ACCOUNT_ID}&${params}`
-  ];
-  for (const url of directUrls) {
+  // Tenta cada base com o accountId
+  for (const base of BASES) {
+    const url = `${base}/v2/accounts/${ACCOUNT_ID}/trades?${params}`;
     const data = await tryRequest(url);
     if (data && data.trades) return data.trades;
-    if (data && Array.isArray(data)) return data; // caso retorne array direto
   }
 
-  // 2. Listar contas (para confirmar permissão)
-  console.log('🔎 Tentando listar contas...');
-  const accountsUrl = `${BASE}/v2/accounts`;
-  const accData = await tryRequest(accountsUrl);
-  if (accData && accData.accounts) {
-    console.log('Contas encontradas:', JSON.stringify(accData.accounts));
-    if (accData.accounts.length > 0) {
-      const accId = accData.accounts[0].accountId || accData.accounts[0].id;
-      console.log(`Usando conta ${accId} para buscar trades...`);
-      const tradeData = await tryRequest(`${BASE}/v2/accounts/${accId}/trades?${params}`);
-      if (tradeData && tradeData.trades) return tradeData.trades;
+  // Listar contas em cada base (caso o accountId correto seja diferente)
+  console.log('🔎 Listando contas...');
+  for (const base of BASES) {
+    const accUrl = `${base}/v2/accounts`;
+    const accData = await tryRequest(accUrl);
+    if (accData && accData.accounts) {
+      console.log(`Contas encontradas em ${base}:`, JSON.stringify(accData.accounts));
+      if (accData.accounts.length > 0) {
+        const accId = accData.accounts[0].accountId || accData.accounts[0].id;
+        console.log(`Usando conta ${accId} para buscar trades...`);
+        for (const base2 of BASES) {
+          const tradeUrl = `${base2}/v2/accounts/${accId}/trades?${params}`;
+          const tradeData = await tryRequest(tradeUrl);
+          if (tradeData && tradeData.trades) return tradeData.trades;
+        }
+      }
     }
   }
-
-  // 3. Tentar obter trades sem accountId (endpoint global)
-  const globalUrl = `${BASE}/v2/trades?${params}`;
-  const globalData = await tryRequest(globalUrl);
-  if (globalData && globalData.trades) return globalData.trades;
 
   return null;
 }
@@ -116,13 +114,9 @@ async function main() {
     console.log(`🔑 Token: ${ACCESS_TOKEN ? ACCESS_TOKEN.substring(0, 10) + '...' : 'NÃO DEFINIDO'}`);
     console.log(`🆔 Account ID: ${ACCOUNT_ID}`);
 
-    // Teste rápido de conectividade com o domínio
-    console.log(`🌐 Testando conectividade com ${BASE}...`);
-    await tryRequest(`${BASE}/`);
-
     const trades = await getTradeHistory();
     if (!trades) {
-      throw new Error('Nenhum trade encontrado em todas as tentativas.');
+      throw new Error('Nenhum trade encontrado em todas as tentativas. Verifique a URL base e as permissões da API.');
     }
     const formatted = trades.map(formatTrade);
     fs.writeFileSync(path.join(__dirname, 'trades.json'), JSON.stringify(formatted, null, 2));
