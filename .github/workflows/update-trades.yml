@@ -1,61 +1,79 @@
-name: Diagnóstico completo de endpoints
+name: Descoberta automática do endpoint
 
 on:
   workflow_dispatch:
 
 jobs:
-  check:
+  discover:
     runs-on: ubuntu-latest
     steps:
-      - name: Testar endpoints da Open API
+      - name: Encontrar domínio e endpoint funcional
         env:
           TOKEN: ${{ secrets.CTRADER_ACCESS_TOKEN }}
         run: |
           echo "🔑 Token: ${TOKEN:0:10}..."
           FROM=$(date -d '6 months ago' -u +"%Y-%m-%dT%H:%M:%SZ")
           TO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          PARAMS="from=${FROM}&to=${TO}&limit=3"
+          LIMIT=3
 
-          # Lista de domínios a testar
+          # 1. Procurar domínio que responde a /v2/accounts (listagem de contas)
+          echo "🔎 Etapa 1: Procurando domínio que lista contas..."
           DOMAINS=(
             "https://openapi.ctrader.com"
             "https://api.ct.fpmarkets.com"
             "https://fpmarkets.ctraderapi.com"
             "https://demo.ctraderapi.com"
+            "https://p.c-trader.com"
+            "https://api.p.c-trader.com"
+            "https://ct.fpmarkets.com"
           )
+          WORKING_DOMAIN=""
+          for domain in "${DOMAINS[@]}"; do
+            url="${domain}/v2/accounts"
+            echo "🌐 Tentando: $url"
+            response=$(curl -s -o /tmp/response.txt -w "%{http_code}" -H "Authorization: Bearer ${TOKEN}" "$url" 2>/dev/null)
+            if [ "$response" = "200" ]; then
+              echo "   ✅ SUCESSO! Domínio funcional: $domain"
+              cat /tmp/response.txt | head -c 300
+              WORKING_DOMAIN="$domain"
+              break
+            else
+              echo "   ❌ HTTP $response"
+            fi
+          done
 
-          # Endpoints possíveis para trades (com accountId)
+          if [ -z "$WORKING_DOMAIN" ]; then
+            echo "❌ Nenhum domínio listou contas. Verifique o token."
+            exit 1
+          fi
+
+          # 2. Agora, procurar o endpoint de trades nesse domínio
+          echo ""
+          echo "🔎 Etapa 2: Procurando endpoint de trades em $WORKING_DOMAIN..."
           ENDPOINTS=(
             "/v2/accounts/45897831/trades"
             "/v2/accounts/1077772/trades"
-            "/v1/accounts/45897831/trades"
-            "/v1/accounts/1077772/trades"
-            "/v2/trades/45897831"
-            "/v2/trades?accountId=45897831"
             "/v2/accounts/45897831/history"
+            "/v2/accounts/45897831/deals"
+            "/v2/trades?accountId=45897831"
+            "/v2/accounts/45897831/transactions"
+            "/v1/accounts/45897831/trades"
             "/v1/accounts/45897831/history"
-            "/v2/accounts/45897831/orders"
-            "/v2/accounts/45897831/positions"
           )
-
-          echo "🔍 Testando combinações..."
-          for domain in "${DOMAINS[@]}"; do
-            for endpoint in "${ENDPOINTS[@]}"; do
-              URL="${domain}${endpoint}?${PARAMS}"
-              echo "🌐 ${URL}"
-              RESPONSE=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer ${TOKEN}" "${URL}" 2>&1)
-              HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-              BODY=$(echo "$RESPONSE" | sed '$d')
-              if [ "$HTTP_CODE" = "200" ]; then
-                echo "   ✅ SUCESSO (HTTP 200)"
-                echo "$BODY" | head -c 500
-                echo ""
-                echo "🎯 ENDPOINT CORRETO: $URL"
-                exit 0
-              else
-                echo "   ❌ HTTP $HTTP_CODE"
-              fi
-            done
+          for endpoint in "${ENDPOINTS[@]}"; do
+            url="${WORKING_DOMAIN}${endpoint}?from=${FROM}&to=${TO}&limit=${LIMIT}"
+            echo "🌐 $url"
+            response=$(curl -s -o /tmp/trades.json -w "%{http_code}" -H "Authorization: Bearer ${TOKEN}" "$url" 2>/dev/null)
+            if [ "$response" = "200" ]; then
+              echo "   ✅ SUCESSO! Endpoint funcional: $endpoint"
+              cat /tmp/trades.json | head -c 500
+              # Salva o domínio e endpoint para uso futuro
+              echo "${WORKING_DOMAIN}${endpoint}" > /tmp/api_url.txt
+              exit 0
+            else
+              echo "   ❌ HTTP $response"
+            fi
           done
-          echo "❌ Nenhum endpoint funcionou."
+
+          echo "❌ Nenhum endpoint de trades funcionou."
           exit 1
