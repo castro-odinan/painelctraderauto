@@ -2,44 +2,32 @@ const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
 
-const CLIENT_ID = process.env.CTRADER_CLIENT_ID;
-const CLIENT_SECRET = process.env.CTRADER_CLIENT_SECRET;
-const ACCOUNT_ID = process.env.CTRADER_ACCOUNT_ID;
+const ACCESS_TOKEN = process.env.CTRADER_ACCESS_TOKEN;
+const ACCOUNT_ID = process.env.CTRADER_ACCOUNT_ID;   // 1077772 (já está no secret)
 const API_BASE = 'https://openapi.ctrader.com';
 
-async function getAccessToken() {
-  const res = await fetch(`${API_BASE}/connect/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'client_credentials',
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
-      scope: 'accounts'
-    })
-  });
-  if (!res.ok) throw new Error(`Auth error: ${res.status}`);
-  const data = await res.json();
-  return data.access_token;
-}
-
-async function getTradeHistory(token) {
+async function getTradeHistory() {
   const to = new Date();
   const from = new Date();
   from.setMonth(from.getMonth() - 6);
   const url = `${API_BASE}/v2/accounts/${ACCOUNT_ID}/trades?from=${from.toISOString()}&to=${to.toISOString()}&limit=1000`;
+
   const res = await fetch(url, {
-    headers: { 'Authorization': `Bearer ${token}` }
+    headers: { 'Authorization': `Bearer ${ACCESS_TOKEN}` }
   });
-  if (!res.ok) throw new Error(`Trade history error: ${res.status}`);
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Trade history error: ${res.status} – ${text}`);
+  }
+
   const data = await res.json();
   return data.trades || [];
 }
 
 function formatTrade(raw) {
-  // Ajuste os nomes dos campos conforme a resposta real da API, se necessário
   const closeUTC = new Date(raw.closeTime || raw.closingTime);
-  const openUTC = raw.openTime || raw.openingTime ? new Date(raw.openTime || raw.openingTime) : closeUTC;
+  const openUTC = (raw.openTime || raw.openingTime) ? new Date(raw.openTime || raw.openingTime) : closeUTC;
   const plus2 = d => new Date(d.getTime() + 2 * 60 * 60 * 1000);
   const closeLocal = plus2(closeUTC);
   const openLocal = plus2(openUTC);
@@ -76,8 +64,8 @@ function formatTrade(raw) {
 
 async function main() {
   try {
-    const token = await getAccessToken();
-    const trades = await getTradeHistory(token);
+    console.log('🔑 Usando access token direto...');
+    const trades = await getTradeHistory();
     const formatted = trades.map(formatTrade);
     fs.writeFileSync(path.join(__dirname, 'trades.json'), JSON.stringify(formatted, null, 2));
     console.log(`✅ ${formatted.length} trades salvos em trades.json`);
