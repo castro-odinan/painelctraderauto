@@ -3,24 +3,33 @@ const fs = require('fs');
 const path = require('path');
 
 const ACCESS_TOKEN = process.env.CTRADER_ACCESS_TOKEN;
-const ACCOUNT_ID = process.env.CTRADER_ACCOUNT_ID;   // 1077772 (já está no secret)
 const API_BASE = 'https://openapi.ctrader.com';
 
-async function getTradeHistory() {
+async function getAccounts() {
+  const res = await fetch(`${API_BASE}/v2/accounts`, {
+    headers: { 'Authorization': `Bearer ${ACCESS_TOKEN}` }
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Erro ao listar contas: ${res.status} – ${text.substring(0, 200)}`);
+  }
+  const data = await res.json();
+  return data.accounts || [];
+}
+
+async function getTradeHistory(accountId) {
   const to = new Date();
   const from = new Date();
   from.setMonth(from.getMonth() - 6);
-  const url = `${API_BASE}/v2/accounts/${ACCOUNT_ID}/trades?from=${from.toISOString()}&to=${to.toISOString()}&limit=1000`;
-
+  const url = `${API_BASE}/v2/accounts/${accountId}/trades?from=${from.toISOString()}&to=${to.toISOString()}&limit=1000`;
+  console.log(`🔗 Chamando: GET ${url}`);
   const res = await fetch(url, {
     headers: { 'Authorization': `Bearer ${ACCESS_TOKEN}` }
   });
-
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Trade history error: ${res.status} – ${text}`);
+    throw new Error(`Trade history error: ${res.status} – ${text.substring(0, 200)}`);
   }
-
   const data = await res.json();
   return data.trades || [];
 }
@@ -64,8 +73,25 @@ function formatTrade(raw) {
 
 async function main() {
   try {
-    console.log('🔑 Usando access token direto...');
-    const trades = await getTradeHistory();
+    // 1. Listar contas associadas ao token
+    console.log('📋 Obtendo lista de contas...');
+    const accounts = await getAccounts();
+    console.log('Contas encontradas:', JSON.stringify(accounts, null, 2));
+
+    if (!accounts.length) {
+      throw new Error('Nenhuma conta encontrada. Verifique o token e as permissões.');
+    }
+
+    // 2. Procurar a conta 1077772 ou usar a primeira
+    let targetAccount = accounts.find(acc => acc.accountId === '1077772' || acc.number === '1077772' || acc.id === '1077772');
+    if (!targetAccount) {
+      console.warn('⚠️ Conta 1077772 não encontrada na listagem. Usando a primeira conta disponível.');
+      targetAccount = accounts[0];
+    }
+    console.log(`✅ Usando conta: ${targetAccount.accountId || targetAccount.id || targetAccount.number}`);
+
+    // 3. Buscar trades usando o accountId real
+    const trades = await getTradeHistory(targetAccount.accountId || targetAccount.id || targetAccount.number);
     const formatted = trades.map(formatTrade);
     fs.writeFileSync(path.join(__dirname, 'trades.json'), JSON.stringify(formatted, null, 2));
     console.log(`✅ ${formatted.length} trades salvos em trades.json`);
