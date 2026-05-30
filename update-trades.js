@@ -3,52 +3,75 @@ const fs = require('fs');
 const path = require('path');
 
 const ACCESS_TOKEN = process.env.CTRADER_ACCESS_TOKEN;
+const ACCOUNT_ID = process.env.CTRADER_ACCOUNT_ID; // 1077772
+
+// Bases a testar (sandbox real costuma ser api.ctrader.com ou openapi.ctrader.com)
 const BASES = [
-  'https://sandbox.ctraderapi.com',   // Sandbox (contas demo)
-  'https://openapi.ctrader.com'       // Produção
+  'https://api.ctrader.com',
+  'https://openapi.ctrader.com'
 ];
 
-// Decodifica payload do JWT sem verificar assinatura
-function decodeJWT(token) {
-  const parts = token.split('.');
-  if (parts.length !== 3) return null;
-  const payload = parts[1];
-  return JSON.parse(Buffer.from(payload, 'base64').toString('utf8'));
-}
-
-async function tryEndpoint(url, headers) {
-  const res = await fetch(url, { headers });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status} – ${text.substring(0, 100)}`);
-  }
-  return res.json();
-}
-
-async function getAccounts(base) {
-  const res = await fetch(`${base}/v2/accounts`, {
-    headers: { 'Authorization': `Bearer ${ACCESS_TOKEN}` }
-  });
-  if (!res.ok) return null;
-  const data = await res.json();
-  return data.accounts || [];
-}
-
-async function getTradeHistory(base, accountId) {
-  const to = new Date();
-  const from = new Date();
-  from.setMonth(from.getMonth() - 6);
-  const url = `${base}/v2/accounts/${accountId}/trades?from=${from.toISOString()}&to=${to.toISOString()}&limit=1000`;
+async function tryRequest(url) {
   console.log(`🔗 Tentando: ${url}`);
   const res = await fetch(url, {
     headers: { 'Authorization': `Bearer ${ACCESS_TOKEN}` }
   });
+  const body = await res.text();
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status} – ${text.substring(0, 100)}`);
+    console.log(`   ❌ Erro ${res.status}: ${body.substring(0, 150)}`);
+    return null;
   }
-  const data = await res.json();
-  return data.trades || [];
+  try {
+    const json = JSON.parse(body);
+    console.log(`   ✅ Sucesso! Encontrados ${json.trades ? json.trades.length : '?'} trades.`);
+    return json;
+  } catch (e) {
+    console.log(`   ⚠️ Resposta não é JSON: ${body.substring(0, 100)}`);
+    return null;
+  }
+}
+
+async function getTradeHistory() {
+  const to = new Date();
+  const from = new Date();
+  from.setMonth(from.getMonth() - 6);
+  const params = `from=${from.toISOString()}&to=${to.toISOString()}&limit=1000`;
+
+  // Tenta v2 e v1 em todas as bases
+  const versions = ['v2', 'v1'];
+  for (const base of BASES) {
+    for (const ver of versions) {
+      const url = `${base}/${ver}/accounts/${ACCOUNT_ID}/trades?${params}`;
+      const data = await tryRequest(url);
+      if (data && data.trades) return data.trades;
+    }
+  }
+
+  // Última tentativa: listar contas (se disponível)
+  console.log('🔎 Nenhum endpoint de trades funcionou. Tentando listar contas...');
+  for (const base of BASES) {
+    for (const ver of versions) {
+      const url = `${base}/${ver}/accounts`;
+      const data = await tryRequest(url);
+      if (data && data.accounts) {
+        console.log('Contas encontradas:', JSON.stringify(data.accounts));
+        // Tenta primeiro accountId da lista
+        if (data.accounts.length > 0) {
+          const accId = data.accounts[0].accountId || data.accounts[0].id;
+          console.log(`Usando conta ${accId}`);
+          for (const base2 of BASES) {
+            for (const ver2 of versions) {
+              const url2 = `${base2}/${ver2}/accounts/${accId}/trades?${params}`;
+              const data2 = await tryRequest(url2);
+              if (data2 && data2.trades) return data2.trades;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 function formatTrade(raw) {
@@ -90,70 +113,16 @@ function formatTrade(raw) {
 
 async function main() {
   try {
-    // 1. Tenta extrair accountId(s) do token JWT
-    const jwt = decodeJWT(ACCESS_TOKEN);
-    console.log('📦 Payload do token:', JSON.stringify(jwt, null, 2));
+    console.log(`🔑 Token: ${ACCESS_TOKEN ? ACCESS_TOKEN.substring(0, 10) + '...' : 'NÃO DEFINIDO'}`);
+    console.log(`🆔 Account ID: ${ACCOUNT_ID}`);
 
-    let accountIds = [];
-    if (jwt) {
-      // Campos comuns na Open API: sub, accountId, accountIds, aid
-      accountIds = [
-        jwt.sub,
-        jwt.accountId,
-        jwt.account_id,
-        ...(jwt.accountIds || []),
-        ...(jwt.aid ? [jwt.aid] : [])
-      ].filter(Boolean);
+    const trades = await getTradeHistory();
+    if (!trades) {
+      throw new Error('Nenhum trade encontrado em todas as tentativas.');
     }
-
-    if (!accountIds.length) {
-      console.log('🔎 Nenhum accountId no token, tentando descobrir pelas contas...');
-      // Tenta listar contas em cada base
-      for (const base of BASES) {
-        try {
-          const accounts = await getAccounts(base);
-          if (accounts && accounts.length) {
-            accountIds = accounts.map(a => a.accountId || a.id || a.number);
-            console.log(`✅ Contas encontradas em ${base}:`, accountIds);
-            break;
-          }
-        } catch (e) {
-          console.log(`❌ Falha ao listar contas em ${base}: ${e.message}`);
-        }
-      }
-    }
-
-    if (!accountIds.length) {
-      throw new Error('Não foi possível obter nenhum accountId. Verifique o token e as permissões.');
-    }
-
-    // 2. Para cada accountId, tenta buscar trades em cada base até encontrar
-    let trades = null;
-    for (const accountId of accountIds) {
-      for (const base of BASES) {
-        try {
-          trades = await getTradeHistory(base, accountId);
-          if (trades) {
-            console.log(`✅ Trades obtidos usando conta ${accountId} em ${base}`);
-            break;
-          }
-        } catch (e) {
-          console.log(`❌ Tentativa falhou (${base} - ${accountId}): ${e.message}`);
-        }
-      }
-      if (trades) break;
-    }
-
-    if (!trades || !trades.length) {
-      // Se não encontrou trades, cria um array vazio para não quebrar o dashboard
-      trades = [];
-      console.warn('⚠️ Nenhum trade encontrado. Gerando trades.json vazio.');
-    }
-
     const formatted = trades.map(formatTrade);
     fs.writeFileSync(path.join(__dirname, 'trades.json'), JSON.stringify(formatted, null, 2));
     console.log(`✅ ${formatted.length} trades salvos em trades.json`);
-
   } catch (err) {
     console.error('❌ Erro geral:', err.message);
     process.exit(1);
