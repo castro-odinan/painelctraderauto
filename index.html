@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Dashboard cTrader (Auto + Fallback Excel)</title>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+<style>
+:root {
+  --bg:#050505; --line:#444; --text:#f2f2f2; --muted:#bdbdbd;
+  --accent:#ef8f28; --ok:#b7d3b2; --oktext:#1a3a1a;
+  --bad:#f4b6b6; --badtext:#6b1a1a;
+}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Segoe UI,Arial,sans-serif}
+.app{min-height:100vh;padding:8px;display:flex;flex-direction:column;gap:10px}
+.warn{border:1px solid #6d5400;background:#1b1404;color:#f3d279;padding:10px;border-radius:6px;font-size:13px;line-height:1.35;white-space:pre-wrap;max-height:140px;overflow:auto}
+.topbar,.filters,.title-row,.detail-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
+.btn,select{background:#111;color:#fff;border:1px solid #555;border-radius:6px;min-height:36px;padding:6px 10px;font-size:14px;cursor:pointer}
+.btn-upload{background:#1e3a5f;border-color:#4a7c9c}
+.btn-api{background:#2e5a1e;border-color:#5a8c3e}
+.month-title{display:flex;gap:20px;font-size:22px;font-weight:700;color:var(--accent); justify-content:center; flex:1}
+.summary{text-align:center;font-size:14px;line-height:1.45; margin-bottom:8px}
+.summary .value{font-weight:700}
+.summary .value.positive{color:#9bd28e}
+.summary .value.negative{color:#ff6b6b}
+.calendar{display:grid;grid-template-columns:repeat(7,1fr);border-top:1px solid var(--line);border-left:1px solid var(--line)}
+.weekday,.cell{border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.weekday{color:#d4cc57;text-align:center;padding:6px 4px;font-size:14px}
+.cell{min-height:112px;position:relative;padding:28px 8px 8px;cursor:pointer}
+.cell.empty{cursor:default}
+.day-number{position:absolute;top:4px;right:8px;color:#d6dde8;font-size:14px}
+.day-box{color:var(--oktext);padding:6px 4px;font-size:12px;line-height:1.3;text-align:center;border-radius:6px}
+.day-box.positive{background:var(--ok)}
+.day-box.negative{background:var(--bad); color:var(--badtext)}
+.day-box div{margin:2px 0}
+.hidden{display:none !important}
+.detail{display:flex;flex-direction:column;gap:10px}
+.detail-card{background:var(--ok);color:var(--oktext);border-radius:6px;padding:12px;text-align:center;font-size:16px;line-height:1.5;margin-bottom:8px}
+.detail-card.negative{background:var(--bad); color:var(--badtext)}
+.table-wrap{overflow:auto;border:1px solid #333;max-height:70vh}
+table{width:100%;border-collapse:collapse;min-width:1180px;font-size:13px}
+th,td{border:1px solid #2e2e2e;padding:6px 8px;white-space:nowrap;text-align:left}
+th{color:#d4cc57;background:#111}
+.num{text-align:right}
+.pos{color:#4ad46b}
+.neg{color:#ff6b6b}
+.muted{color:var(--muted)}
+.conn{font-weight:700}
+.ok{color:#9bd28e}
+.trade-positive{background-color: rgba(68, 148, 68, 0.3)}
+.trade-negative{background-color: rgba(200, 60, 60, 0.3)}
+@media (max-width:768px){.month-title{font-size:18px;gap:12px}.cell{min-height:92px;padding-top:24px}.day-box{font-size:10px}.weekday{font-size:12px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="warning" class="warn">🔄 Carregando dados automaticamente...</div>
+  <div id="monthView">
+    <div class="topbar">
+      <div>
+        <button class="btn" id="prevMonth">◀</button>
+        <button class="btn" id="currentMonthBtn">Mês atual</button>
+        <button class="btn" id="nextMonth">▶</button>
+        <label class="btn btn-upload" style="display:inline-block; cursor:pointer;">📂 Upload Excel
+          <input type="file" id="excelUpload" accept=".xlsx, .xls" style="display:none;" />
+        </label>
+        <button class="btn btn-api" id="apiLoadBtn">🔄 Recarregar JSON</button>
+      </div>
+      <div class="muted" id="statusText">Aguardando dados</div>
+    </div>
+    <div class="filters">
+      <select id="symbolFilter"><option value="">Símbolo: todos</option></select>
+      <select id="channelFilter"><option value="">Canal: todos</option></select>
+      <select id="labelFilter"><option value="">Label: todos</option></select>
+      <button class="btn" id="clearFiltersBtn">Limpar filtro</button>
+    </div>
+    <div class="title-row">
+      <div class="month-title"><span id="yearText"></span> <span id="monthText"></span></div>
+    </div>
+    <div class="summary" id="summaryBox"></div>
+    <div class="calendar" id="calendar"></div>
+  </div>
+  <div id="dayView" class="detail hidden">
+    <div class="detail-head"><button class="btn" id="backBtn">← Voltar</button><div id="dayTitle" style="font-size:18px;font-weight:700"></div></div>
+    <div class="detail-card" id="daySummary"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>ID</th><th>Channel</th><th>Label</th><th>Order ID</th><th>Symbol</th><th>Abertura</th><th>Fechamento</th><th>Horário abertura</th><th>Horário fechamento</th><th>Volume req.</th><th>Qtd fechada</th><th>Preço entrada</th><th>Vol fechado</th><th>Preço saída</th><th>Swap</th><th>Comissão</th><th>Pips</th><th>Gross</th><th>Net</th><th>Saldo (real)</th>
+        </thead>
+        <tbody id="detailBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<script>
+// ============================================
+// URL do arquivo JSON gerado pelo GitHub Actions
+// ============================================
+const API_TRADES_URL = 'trades.json'; // mesmo diretório do GitHub Pages
+
+const MONTHS = ['JANEIRO','FEVEREIRO','MARÇO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO']; 
+const WEEKDAYS = ['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado'];
+
+let allTrades = [];
+let currentDate = new Date();
+
+const els = {
+  warning: document.getElementById('warning'),
+  statusText: document.getElementById('statusText'),
+  monthView: document.getElementById('monthView'),
+  dayView: document.getElementById('dayView'),
+  calendar: document.getElementById('calendar'),
+  summaryBox: document.getElementById('summaryBox'),
+  yearText: document.getElementById('yearText'),
+  monthText: document.getElementById('monthText'),
+  dayTitle: document.getElementById('dayTitle'),
+  daySummary: document.getElementById('daySummary'),
+  detailBody: document.getElementById('detailBody'),
+  symbolFilter: document.getElementById('symbolFilter'),
+  channelFilter: document.getElementById('channelFilter'),
+  labelFilter: document.getElementById('labelFilter'),
+  apiLoadBtn: document.getElementById('apiLoadBtn')
+};
+
+// ---- UTILIDADES (originais) ----
+function parseNumber(str) {
+  if (str === undefined || str === null) return 0;
+  if (typeof str === 'number') return str;
+  let s = String(str).trim();
+  s = s.replace(/\./g, '').replace(',', '.');
+  let num = parseFloat(s);
+  return isNaN(num) ? 0 : num;
+}
+
+function findColumn(row, possibleNames) {
+  const keys = Object.keys(row);
+  for (let name of possibleNames) {
+    const normalized = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    for (let k of keys) {
+      if (k.toLowerCase().replace(/[^a-z0-9]/g, '') === normalized) {
+        return row[k];
+      }
+    }
+  }
+  return undefined;
+}
+
+// Converte string do Excel (UTC+2) para UTC (mantido para fallback)
+function parseTradeDateTime(value) {
+  if (!value) return null;
+  let s = String(value).trim();
+  let m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})\.(\d+)/);
+  if (m) {
+    let day = parseInt(m[1], 10);
+    let month = parseInt(m[2], 10);
+    let year = parseInt(m[3], 10);
+    let hour = parseInt(m[4], 10);
+    let minute = parseInt(m[5], 10);
+    let second = parseInt(m[6], 10);
+    let ms = parseInt(m[7], 10);
+    let utcHour = hour - 2;
+    let utcDay = day;
+    let utcMonth = month;
+    let utcYear = year;
+    if (utcHour < 0) {
+      utcHour += 24;
+      let prevDate = new Date(Date.UTC(year, month-1, day - 1));
+      utcDay = prevDate.getUTCDate();
+      utcMonth = prevDate.getUTCMonth() + 1;
+      utcYear = prevDate.getUTCFullYear();
+    }
+    let dateObj = new Date(Date.UTC(utcYear, utcMonth-1, utcDay, utcHour, minute, second, ms));
+    return {
+      originalYear: year,
+      originalMonth: month,
+      originalDay: day,
+      originalHour: hour,
+      dateObj: dateObj
+    };
+  }
+  return null;
+}
+
+function normalizeTrade(row) {
+  const closing = parseTradeDateTime(findColumn(row, ['Closing time', 'closingTime', 'Close time']));
+  const opening = parseTradeDateTime(findColumn(row, ['Opening time', 'openingTime', 'Open time']));
+  if (!closing) return null;
+  return {
+    id: findColumn(row, ['ID', 'Id']) || '',
+    channel: findColumn(row, ['Channel', 'channel']) || '',
+    label: findColumn(row, ['Label', 'label']) || '',
+    orderId: findColumn(row, ['Order ID', 'OrderId', 'orderId']) || '',
+    symbol: findColumn(row, ['Symbol', 'symbol']) || '',
+    openingSide: findColumn(row, ['Opening direction', 'openingDirection']) || '',
+    closingSide: findColumn(row, ['Closing direction', 'closingDirection']) || '',
+    closingYear: closing.originalYear,
+    closingMonth: closing.originalMonth,
+    closingDay: closing.originalDay,
+    openingYear: opening ? opening.originalYear : closing.originalYear,
+    openingMonth: opening ? opening.originalMonth : closing.originalMonth,
+    openingDay: opening ? opening.originalDay : closing.originalDay,
+    closingTime: closing.dateObj,
+    openingTime: opening ? opening.dateObj : closing.dateObj,
+    requestedVolume: parseNumber(findColumn(row, ['Requested quantity', 'requestedVolume'])),
+    closingQuantity: parseNumber(findColumn(row, ['Closing Quantity', 'closingQuantity'])),
+    entryPrice: parseNumber(findColumn(row, ['Entry price', 'entryPrice'])),
+    closingVolume: parseNumber(findColumn(row, ['Closing volume', 'closingVolume'])),
+    closingPrice: parseNumber(findColumn(row, ['Closing price', 'closingPrice'])),
+    swap: parseNumber(findColumn(row, ['Swap', 'swap'])),
+    commission: parseNumber(findColumn(row, ['Commission', 'commission'])),
+    pips: parseNumber(findColumn(row, ['Pips', 'pips'])),
+    gross: parseNumber(findColumn(row, ['Gross $', 'gross'])),
+    net: parseNumber(findColumn(row, ['Net $', 'net'])),
+    balance: parseNumber(findColumn(row, ['Balance $', 'balance']))
+  };
+}
+
+// Normaliza trades vindos do JSON (já formatado pelo GitHub Actions)
+function normalizeTradeFromJSON(trade) {
+  // O JSON já vem com closingTime/openingTime em ISO, basta converter para Date
+  return {
+    ...trade,
+    closingTime: new Date(trade.closingTime),
+    openingTime: new Date(trade.openingTime)
+  };
+}
+
+function applyIncomingData(tradesArray, isFromJSON = false) {
+  if (!Array.isArray(tradesArray)) return;
+  let normalized;
+  if (isFromJSON) {
+    normalized = tradesArray.map(normalizeTradeFromJSON).filter(t => t && !isNaN(t.closingTime.getTime()));
+  } else {
+    normalized = tradesArray.map(normalizeTrade).filter(t => t !== null);
+  }
+  if (normalized.length) {
+    allTrades = normalized;
+    els.statusText.innerHTML = `<span class="conn ok">✅ ${allTrades.length} trades carregados</span>`;
+    els.warning.innerHTML = `📊 ${allTrades.length} trades carregados. Use os filtros e navegue pelos meses.`;
+    refillAllFilters();
+    renderMonth();
+  } else {
+    els.warning.innerHTML = '⚠️ Nenhum trade válido encontrado. Verifique a fonte dos dados.';
+  }
+}
+
+// --- UPLOAD EXCEL (mantido) ---
+function handleExcelUpload(file) {
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const data = new Uint8Array(e.target.result);
+    const workbook = XLSX.read(data, { type: 'array' });
+    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(firstSheet);
+    if (!rows.length) {
+      els.warning.innerHTML = 'Arquivo vazio ou sem dados.';
+      return;
+    }
+    applyIncomingData(rows, false);
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// --- CARREGAMENTO AUTOMÁTICO DO JSON ---
+async function loadFromJSON() {
+  els.warning.innerHTML = '🔄 Buscando dados do servidor...';
+  try {
+    const response = await fetch(API_TRADES_URL);
+    if (!response.ok) throw new Error(`Status ${response.status}`);
+    const trades = await response.json();
+    applyIncomingData(trades, true);
+  } catch (err) {
+    els.warning.innerHTML = `❌ Erro ao carregar JSON: ${err.message}. Use o upload manual.`;
+  }
+}
+
+// --- FILTROS (exatamente como original) ---
+function uniqueValues(arr, key) {
+  return [...new Set(arr.map(x => x[key]).filter(Boolean))].sort((a,b) => String(a).localeCompare(String(b)));
+}
+
+function refillFilter(select, label, values) {
+  const current = select.value;
+  select.innerHTML = `<option value="">${label}: todos</option>`;
+  values.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = v;
+    select.appendChild(opt);
+  });
+  if (values.includes(current)) {
+    select.value = current;
+  } else {
+    select.value = ""; 
+  }
+}
+
+function refillAllFilters() {
+  const y = currentDate.getFullYear();
+  const m = currentDate.getMonth();
+  
+  const monthTrades = allTrades.filter(t => t.closingYear === y && t.closingMonth === m + 1);
+
+  const validSymbols = uniqueValues(monthTrades, 'symbol');
+  const validChannels = uniqueValues(monthTrades, 'channel');
+  const validLabels = uniqueValues(monthTrades, 'label');
+
+  if (!validSymbols.includes(els.symbolFilter.value)) els.symbolFilter.value = "";
+  if (!validChannels.includes(els.channelFilter.value)) els.channelFilter.value = "";
+  if (!validLabels.includes(els.labelFilter.value)) els.labelFilter.value = "";
+
+  const currentSymbol = els.symbolFilter.value;
+  const currentChannel = els.channelFilter.value;
+  const currentLabel = els.labelFilter.value;
+
+  const dataForSymbol = monthTrades.filter(t => 
+    (!currentChannel || t.channel === currentChannel) && 
+    (!currentLabel || t.label === currentLabel)
+  );
+  
+  const dataForChannel = monthTrades.filter(t => 
+    (!currentSymbol || t.symbol === currentSymbol) && 
+    (!currentLabel || t.label === currentLabel)
+  );
+
+  const dataForLabel = monthTrades.filter(t => 
+    (!currentSymbol || t.symbol === currentSymbol) && 
+    (!currentChannel || t.channel === currentChannel)
+  );
+
+  refillFilter(els.symbolFilter, 'Símbolo', uniqueValues(dataForSymbol, 'symbol'));
+  refillFilter(els.channelFilter, 'Canal', uniqueValues(dataForChannel, 'channel'));
+  refillFilter(els.labelFilter, 'Label', uniqueValues(dataForLabel, 'label'));
+}
+
+function applyFilters() {
+  return allTrades.filter(t => {
+    if (els.symbolFilter.value && t.symbol !== els.symbolFilter.value) return false;
+    if (els.channelFilter.value && t.channel !== els.channelFilter.value) return false;
+    if (els.labelFilter.value && t.label !== els.labelFilter.value) return false;
+    return true;
+  });
+}
+
+function getMonthTrades(y, m) {
+  return applyFilters().filter(t => t.closingYear === y && t.closingMonth === m+1)
+                      .sort((a,b) => a.closingTime - b.closingTime);
+}
+
+function summarizeMonth(trades) {
+  if (!trades.length) return null;
+  const netTotal = trades.reduce((sum, t) => sum + t.net, 0);
+  const primeiroTrade = trades[0];
+  const saldoInicial = primeiroTrade.balance - primeiroTrade.net;
+  const saldoFinal = saldoInicial + netTotal;
+  const resultado = netTotal;
+  const perc = saldoInicial !== 0 ? (resultado / saldoInicial * 100) : 0;
+  return { saldoInicial, saldoFinal, resultado, perc };
+}
+
+function getDailyMetrics(monthTrades) {
+  if (!monthTrades.length) return new Map();
+  const sorted = [...monthTrades].sort((a,b) => a.closingTime - b.closingTime);
+  const saldoInicialMes = sorted[0].balance - sorted[0].net;
+  let netAcumulado = 0;
+  const dayMap = new Map();
+  for (let t of sorted) {
+    const key = `${t.closingYear}-${String(t.closingMonth).padStart(2,'0')}-${String(t.closingDay).padStart(2,'0')}`;
+    if (!dayMap.has(key)) dayMap.set(key, { netDia: 0, trades: [] });
+    const day = dayMap.get(key);
+    day.netDia += t.net;
+    day.trades.push(t);
+  }
+  const result = new Map();
+  let netAcumuladoAntes = 0;
+  const sortedDays = [...dayMap.keys()].sort();
+  for (let key of sortedDays) {
+    const day = dayMap.get(key);
+    const saldoInicioDia = saldoInicialMes + netAcumuladoAntes;
+    const resultadoDia = day.netDia;
+    const saldoFinalDia = saldoInicioDia + resultadoDia;
+    const percDia = saldoInicioDia !== 0 ? (resultadoDia / saldoInicioDia * 100) : 0;
+    const percAcumulado = saldoInicialMes !== 0 ? ((saldoFinalDia - saldoInicialMes) / saldoInicialMes * 100) : 0;
+    result.set(key, {
+      netDia: resultadoDia,
+      saldoFinalDia,
+      percDia,
+      percAcumulado,
+      wins: day.trades.filter(t => t.net > 0).length,
+      losses: day.trades.filter(t => t.net < 0).length,
+      count: day.trades.length,
+      trades: day.trades
+    });
+    netAcumuladoAntes += day.netDia;
+  }
+  return result;
+}
+
+function fmt2(n) { return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmtPct(n) { return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%'; }
+
+function renderMonth() {
+  const y = currentDate.getFullYear(), m = currentDate.getMonth();
+  const monthTrades = getMonthTrades(y, m);
+  const monthSummary = summarizeMonth(monthTrades);
+  
+  els.yearText.textContent = y;
+  els.monthText.textContent = MONTHS[m];
+  
+  if (monthSummary) {
+    const resultClass = monthSummary.resultado >= 0 ? 'positive' : 'negative';
+    els.summaryBox.innerHTML = `
+      <div><b>SALDO INICIAL DO MÊS:</b> ${fmt2(monthSummary.saldoInicial)}</div>
+      <div><b>RESULTADO DO MÊS:</b> <span class="value ${resultClass}">${fmt2(monthSummary.resultado)} | ${fmtPct(monthSummary.perc)}</span></div>
+      <div><b>SALDO FINAL DO MÊS:</b> ${fmt2(monthSummary.saldoFinal)}</div>
+      <div style="font-size:12px; color:#aaa; margin-top:4px;">⚠️ Depósitos e/ou saques não afetam estes valores</div>
+    `;
+  } else {
+    els.summaryBox.innerHTML = `<div class="muted"><b>SEM DADOS</b> para os filtros e mês selecionados.</div>`;
+  }
+  
+  els.calendar.innerHTML = '';
+  WEEKDAYS.forEach(d => {
+    const el = document.createElement('div');
+    el.className = 'weekday';
+    el.textContent = d;
+    els.calendar.appendChild(el);
+  });
+  
+  const firstDay = new Date(y, m, 1);
+  let startWeekDay = firstDay.getDay();
+  const daysInMonth = new Date(y, m+1, 0).getDate();
+  const dailyMetrics = getDailyMetrics(monthTrades);
+  
+  for (let i = 0; i < startWeekDay; i++) {
+    const empty = document.createElement('div');
+    empty.className = 'cell empty';
+    els.calendar.appendChild(empty);
+  }
+  
+  for (let day = 1; day <= daysInMonth; day++) {
+    const key = `${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const dayInfo = dailyMetrics.get(key);
+    const hasTrades = dayInfo && dayInfo.count > 0;
+    const cell = document.createElement('div');
+    cell.className = 'cell' + (hasTrades ? '' : ' empty');
+    cell.innerHTML = `<div class="day-number">${String(day).padStart(2,'0')}</div>`;
+    if (hasTrades) {
+      const box = document.createElement('div');
+      box.className = `day-box ${dayInfo.netDia >= 0 ? 'positive' : 'negative'}`;
+      box.innerHTML = `
+        <div>${fmt2(dayInfo.netDia)} | ${fmt2(dayInfo.saldoFinalDia)}</div>
+        <div>${fmtPct(dayInfo.percDia)} | ${fmtPct(dayInfo.percAcumulado)}</div>
+        <div>${dayInfo.wins}G ${dayInfo.losses}L | ${dayInfo.count} trades</div>
+      `;
+      cell.appendChild(box);
+      cell.addEventListener('click', (function(k, info) {
+        return function() { openDay(k, info.trades, info); };
+      })(key, dayInfo));
+    }
+    els.calendar.appendChild(cell);
+  }
+}
+
+function formatDateTime(dateObj) {
+  if (!dateObj || !(dateObj instanceof Date) || isNaN(dateObj)) return '';
+  return dateObj.toLocaleString('pt-BR');
+}
+
+function openDay(key, trades, dayInfo) {
+  const parts = key.split('-');
+  const title = `${parts[2]}/${parts[1]}/${parts[0]}`;
+  els.dayTitle.textContent = `Detalhe do dia ${title}`;
+  const detailCard = els.daySummary;
+  detailCard.className = `detail-card ${dayInfo.netDia >= 0 ? 'positive' : 'negative'}`;
+  detailCard.innerHTML = `
+    <div>${fmt2(dayInfo.netDia)} | ${fmt2(dayInfo.saldoFinalDia)}</div>
+    <div>${fmtPct(dayInfo.percDia)} | ${fmtPct(dayInfo.percAcumulado)}</div>
+    <div>${dayInfo.wins}G ${dayInfo.losses}L | ${dayInfo.count} trades</div>
+  `;
+  
+  els.detailBody.innerHTML = trades.map(t => {
+    const trClass = t.net >= 0 ? 'trade-positive' : 'trade-negative';
+    return `<tr class="${trClass}">
+      <td>${t.id}</td>
+      <td>${t.channel || ''}</td>
+      <td>${t.label || ''}</td>
+      <td>${t.orderId || ''}</td>
+      <td>${t.symbol || ''}</td>
+      <td>${t.openingSide || ''}</td>
+      <td>${t.closingSide || ''}</td>
+      <td>${formatDateTime(t.openingTime)}</td>
+      <td>${formatDateTime(t.closingTime)}</td>
+      <td class="num">${fmt2(t.requestedVolume)}</td>
+      <td class="num">${fmt2(t.closingQuantity)}</td>
+      <td class="num">${fmt2(t.entryPrice)}</td>
+      <td class="num">${fmt2(t.closingVolume)}</td>
+      <td class="num">${fmt2(t.closingPrice)}</td>
+      <td class="num ${t.swap >= 0 ? 'pos' : 'neg'}">${fmt2(t.swap)}</td>
+      <td class="num ${t.commission >= 0 ? 'pos' : 'neg'}">${fmt2(t.commission)}</td>
+      <td class="num ${t.pips >= 0 ? 'pos' : 'neg'}">${fmt2(t.pips)}</td>
+      <td class="num ${t.gross >= 0 ? 'pos' : 'neg'}">${fmt2(t.gross)}</td>
+      <td class="num ${t.net >= 0 ? 'pos' : 'neg'}">${fmt2(t.net)}</td>
+      <td class="num">${fmt2(t.balance)}</td>
+    </tr>`;
+  }).join('');
+  
+  els.monthView.classList.add('hidden');
+  els.dayView.classList.remove('hidden');
+}
+
+// ---- EVENTOS ----
+function initEvents() {
+  document.getElementById('prevMonth').addEventListener('click', () => {
+    currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
+    refillAllFilters();
+    renderMonth();
+  });
+  document.getElementById('nextMonth').addEventListener('click', () => {
+    currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
+    refillAllFilters();
+    renderMonth();
+  });
+  document.getElementById('currentMonthBtn').addEventListener('click', () => {
+    const now = new Date();
+    currentDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    refillAllFilters();
+    renderMonth();
+  });
+  
+  document.getElementById('clearFiltersBtn').addEventListener('click', () => {
+    els.symbolFilter.value = '';
+    els.channelFilter.value = '';
+    els.labelFilter.value = '';
+    refillAllFilters();
+    renderMonth();
+  });
+  document.getElementById('backBtn').addEventListener('click', () => {
+    els.dayView.classList.add('hidden');
+    els.monthView.classList.remove('hidden');
+  });
+  
+  [els.symbolFilter, els.channelFilter, els.labelFilter].forEach(el => {
+    el.addEventListener('change', () => {
+      refillAllFilters();
+      els.dayView.classList.add('hidden');
+      els.monthView.classList.remove('hidden');
+      renderMonth();
+    });
+  });
+  
+  const fileInput = document.getElementById('excelUpload');
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length) handleExcelUpload(e.target.files[0]);
+    fileInput.value = '';
+  });
+
+  // Botão de recarregar JSON (ou recarregar os dados)
+  els.apiLoadBtn.addEventListener('click', loadFromJSON);
+}
+
+// Inicialização: tenta carregar o JSON automaticamente
+function init() {
+  initEvents();
+  loadFromJSON(); // busca o trades.json assim que abrir a página
+}
+init();
+</script>
+</body>
+</html>
