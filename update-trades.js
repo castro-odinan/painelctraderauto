@@ -3,8 +3,8 @@ const fs = require('fs');
 const path = require('path');
 
 const ACCESS_TOKEN = process.env.CTRADER_ACCESS_TOKEN;
-const ACCOUNT_ID = process.env.CTRADER_ACCOUNT_ID; // 1077772
-const BASE_URL = 'https://api.ct.fpmarkets.com';
+const ACCOUNT_ID = process.env.CTRADER_ACCOUNT_ID; // 45897831
+const BASE_URL = 'https://openapi.ctrader.com';
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
   const controller = new AbortController();
@@ -81,7 +81,7 @@ async function main() {
     console.log(`🆔 Account ID: ${ACCOUNT_ID}`);
 
     const trades = await getTradeHistory();
-    console.log(`📦 ${trades.length} trades recebidos da API`);
+    console.log(`📦 ${trades.length} trades recebidos`);
 
     const formatted = trades.map(formatTrade);
     fs.writeFileSync(path.join(__dirname, 'trades.json'), JSON.stringify(formatted, null, 2));
