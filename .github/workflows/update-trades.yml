@@ -1,29 +1,31 @@
-name: Diagnóstico API FP Markets
+name: Atualizar trades.json
 
 on:
+  schedule:
+    - cron: '0 */6 * * *'   # a cada 6 horas
   workflow_dispatch:
 
 jobs:
-  check:
+  update:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Testar conectividade com a API da FP Markets
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Instalar dependências
+        run: npm install node-fetch@2
+      - name: Buscar trades da Open API
         env:
-          TOKEN: ${{ secrets.CTRADER_ACCESS_TOKEN }}
-          ACCOUNT_ID: ${{ secrets.CTRADER_ACCOUNT_ID }}
+          CTRADER_ACCESS_TOKEN: ${{ secrets.CTRADER_ACCESS_TOKEN }}
+          CTRADER_ACCOUNT_ID: ${{ secrets.CTRADER_ACCOUNT_ID }}
+        run: node update-trades.js
+      - name: Commit e push do trades.json
         run: |
-          echo "🔑 Token: ${TOKEN:0:10}..."
-          echo "🆔 Account ID: ${ACCOUNT_ID}"
-          echo ""
-          echo "🌐 Ping api.ct.fpmarkets.com"
-          ping -c 2 api.ct.fpmarkets.com || echo "Falha no ping"
-          echo ""
-          echo "📡 Tentando listar contas..."
-          curl -v -H "Authorization: Bearer ${TOKEN}" \
-            "https://api.ct.fpmarkets.com/v2/accounts" 2>&1 | head -50
-          echo ""
-          echo "📡 Tentando obter trades..."
-          FROM=$(date -d '6 months ago' -u +"%Y-%m-%dT%H:%M:%SZ")
-          TO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          curl -v -H "Authorization: Bearer ${TOKEN}" \
-            "https://api.ct.fpmarkets.com/v2/accounts/${ACCOUNT_ID}/trades?from=${FROM}&to=${TO}&limit=5" 2>&1 | head -50
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add trades.json
+          git diff --staged --quiet || git commit -m "Atualiza trades.json [automático]"
+          git push
