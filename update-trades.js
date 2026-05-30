@@ -1,21 +1,36 @@
 const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
+const { setTimeout } = require('timers/promises');
 
 const ACCESS_TOKEN = process.env.CTRADER_ACCESS_TOKEN;
 const ACCOUNT_ID = process.env.CTRADER_ACCOUNT_ID; // 1077772
 
-// Bases específicas para FP Markets (demo e possíveis mirrors)
+// Timeout para cada requisição (10 segundos)
+const FETCH_TIMEOUT = 10000;
+
+// Bases específicas para FP Markets (demo)
 const BASES = [
   'https://api.ct.fpmarkets.com',
   'https://api.fpmarkets.com',
   'https://demo.ctraderapi.com'
 ];
 
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function tryRequest(url) {
   console.log(`🔗 Tentando: ${url}`);
   try {
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       headers: { 'Authorization': `Bearer ${ACCESS_TOKEN}` }
     });
     const body = await res.text();
@@ -31,8 +46,12 @@ async function tryRequest(url) {
       console.log(`   ⚠️ Resposta não é JSON: ${body.substring(0, 200)}`);
       return null;
     }
-  } catch (networkError) {
-    console.log(`   ⚠️ Erro de rede: ${networkError.message}`);
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      console.log(`   ⏰ Timeout após ${FETCH_TIMEOUT/1000}s`);
+    } else {
+      console.log(`   ⚠️ Erro de rede: ${err.message}`);
+    }
     return null;
   }
 }
@@ -45,21 +64,22 @@ async function getTradeHistory() {
 
   // Tenta cada base com o accountId
   for (const base of BASES) {
+    console.log(`🌐 Testando base: ${base}`);
     const url = `${base}/v2/accounts/${ACCOUNT_ID}/trades?${params}`;
     const data = await tryRequest(url);
     if (data && data.trades) return data.trades;
   }
 
-  // Listar contas em cada base (caso o accountId correto seja diferente)
-  console.log('🔎 Listando contas...');
+  // Listar contas (fallback)
+  console.log('🔎 Nenhum trade direto. Listando contas...');
   for (const base of BASES) {
     const accUrl = `${base}/v2/accounts`;
     const accData = await tryRequest(accUrl);
     if (accData && accData.accounts) {
-      console.log(`Contas encontradas em ${base}:`, JSON.stringify(accData.accounts));
+      console.log(`Contas em ${base}:`, JSON.stringify(accData.accounts));
       if (accData.accounts.length > 0) {
         const accId = accData.accounts[0].accountId || accData.accounts[0].id;
-        console.log(`Usando conta ${accId} para buscar trades...`);
+        console.log(`Usando conta ${accId}...`);
         for (const base2 of BASES) {
           const tradeUrl = `${base2}/v2/accounts/${accId}/trades?${params}`;
           const tradeData = await tryRequest(tradeUrl);
@@ -116,7 +136,7 @@ async function main() {
 
     const trades = await getTradeHistory();
     if (!trades) {
-      throw new Error('Nenhum trade encontrado em todas as tentativas. Verifique a URL base e as permissões da API.');
+      throw new Error('Nenhum trade encontrado. Verifique token e permissões.');
     }
     const formatted = trades.map(formatTrade);
     fs.writeFileSync(path.join(__dirname, 'trades.json'), JSON.stringify(formatted, null, 2));
