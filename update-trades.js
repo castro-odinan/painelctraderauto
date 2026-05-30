@@ -8,7 +8,7 @@ const ACCOUNT_ID = process.env.CTRADER_ACCOUNT_ID;
 const API_BASE = 'https://openapi.ctrader.com';
 
 async function getAccessToken() {
-  const res = await fetch(`${API_BASE}/oauth/token`, {
+  const res = await fetch(`${API_BASE}/connect/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
