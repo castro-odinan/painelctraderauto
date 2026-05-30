@@ -1,4 +1,4 @@
-name: Descoberta automática do endpoint
+name: Diagnóstico Final
 
 on:
   workflow_dispatch:
@@ -7,17 +7,12 @@ jobs:
   discover:
     runs-on: ubuntu-latest
     steps:
-      - name: Encontrar domínio e endpoint funcional
+      - name: Descobrir domínio e buscar trades
         env:
           TOKEN: ${{ secrets.CTRADER_ACCESS_TOKEN }}
         run: |
           echo "🔑 Token: ${TOKEN:0:10}..."
-          FROM=$(date -d '6 months ago' -u +"%Y-%m-%dT%H:%M:%SZ")
-          TO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          LIMIT=3
-
-          # 1. Procurar domínio que responde a /v2/accounts (listagem de contas)
-          echo "🔎 Etapa 1: Procurando domínio que lista contas..."
+          
           DOMAINS=(
             "https://openapi.ctrader.com"
             "https://api.ct.fpmarkets.com"
@@ -25,55 +20,62 @@ jobs:
             "https://demo.ctraderapi.com"
             "https://p.c-trader.com"
             "https://api.p.c-trader.com"
-            "https://ct.fpmarkets.com"
+            "https://fpmarketssc.ctraderapi.com"
           )
+
           WORKING_DOMAIN=""
           for domain in "${DOMAINS[@]}"; do
             url="${domain}/v2/accounts"
-            echo "🌐 Tentando: $url"
-            response=$(curl -s -o /tmp/response.txt -w "%{http_code}" -H "Authorization: Bearer ${TOKEN}" "$url" 2>/dev/null)
-            if [ "$response" = "200" ]; then
-              echo "   ✅ SUCESSO! Domínio funcional: $domain"
-              cat /tmp/response.txt | head -c 300
+            echo "🌐 Tentando listar contas: $url"
+            response=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer ${TOKEN}" "$url" 2>/dev/null)
+            http_code=$(echo "$response" | tail -1)
+            body=$(echo "$response" | sed '$d')
+            if [ "$http_code" = "200" ]; then
+              echo "   ✅ SUCESSO (HTTP 200)"
+              echo "   Resposta: $body" | head -c 300
               WORKING_DOMAIN="$domain"
               break
             else
-              echo "   ❌ HTTP $response"
+              echo "   ❌ HTTP $http_code"
             fi
           done
 
           if [ -z "$WORKING_DOMAIN" ]; then
-            echo "❌ Nenhum domínio listou contas. Verifique o token."
+            echo "❌ Nenhum domínio retornou 200 para /v2/accounts. Verifique as permissões do token."
             exit 1
           fi
 
-          # 2. Agora, procurar o endpoint de trades nesse domínio
           echo ""
-          echo "🔎 Etapa 2: Procurando endpoint de trades em $WORKING_DOMAIN..."
-          ENDPOINTS=(
-            "/v2/accounts/45897831/trades"
-            "/v2/accounts/1077772/trades"
-            "/v2/accounts/45897831/history"
-            "/v2/accounts/45897831/deals"
-            "/v2/trades?accountId=45897831"
-            "/v2/accounts/45897831/transactions"
-            "/v1/accounts/45897831/trades"
-            "/v1/accounts/45897831/history"
-          )
-          for endpoint in "${ENDPOINTS[@]}"; do
-            url="${WORKING_DOMAIN}${endpoint}?from=${FROM}&to=${TO}&limit=${LIMIT}"
-            echo "🌐 $url"
-            response=$(curl -s -o /tmp/trades.json -w "%{http_code}" -H "Authorization: Bearer ${TOKEN}" "$url" 2>/dev/null)
-            if [ "$response" = "200" ]; then
-              echo "   ✅ SUCESSO! Endpoint funcional: $endpoint"
-              cat /tmp/trades.json | head -c 500
-              # Salva o domínio e endpoint para uso futuro
-              echo "${WORKING_DOMAIN}${endpoint}" > /tmp/api_url.txt
-              exit 0
-            else
-              echo "   ❌ HTTP $response"
-            fi
-          done
+          echo "🎯 Domínio funcional: $WORKING_DOMAIN"
+          echo "🔎 Buscando trades..."
 
-          echo "❌ Nenhum endpoint de trades funcionou."
-          exit 1
+          FROM=$(date -d '6 months ago' -u +"%Y-%m-%dT%H:%M:%SZ")
+          TO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          TRADE_URL="${WORKING_DOMAIN}/v2/accounts/45897831/trades?from=${FROM}&to=${TO}&limit=3"
+          echo "🌐 $TRADE_URL"
+          trade_response=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer ${TOKEN}" "$TRADE_URL")
+          trade_code=$(echo "$trade_response" | tail -1)
+          trade_body=$(echo "$trade_response" | sed '$d')
+          if [ "$trade_code" = "200" ]; then
+            echo "   ✅ Trades obtidos!"
+            echo "$trade_body" | head -c 500
+            echo ""
+            echo "🎉 ENDPOINT CORRETO: $TRADE_URL"
+          else
+            echo "   ❌ HTTP $trade_code"
+            echo "   Corpo: $trade_body"
+            echo ""
+            echo "🔁 Tentando endpoint alternativo: /v2/accounts/45897831/history"
+            HIST_URL="${WORKING_DOMAIN}/v2/accounts/45897831/history?from=${FROM}&to=${TO}&limit=3"
+            echo "🌐 $HIST_URL"
+            hist_response=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer ${TOKEN}" "$HIST_URL")
+            hist_code=$(echo "$hist_response" | tail -1)
+            hist_body=$(echo "$hist_response" | sed '$d')
+            if [ "$hist_code" = "200" ]; then
+              echo "   ✅ History funcionou!"
+              echo "$hist_body" | head -c 500
+              echo "🎉 ENDPOINT ALTERNATIVO: $HIST_URL"
+            else
+              echo "   ❌ Também falhou (HTTP $hist_code)"
+            fi
+          fi
