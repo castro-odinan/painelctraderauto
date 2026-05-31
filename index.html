@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Dashboard cTrader (Auto + Fallback Excel)</title>
+<title>Dashboard cTrader API - Performance Real</title>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
 <style>
 :root {
@@ -17,9 +17,11 @@
 .topbar,.filters,.title-row,.detail-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
 .btn,select{background:#111;color:#fff;border:1px solid #555;border-radius:6px;min-height:36px;padding:6px 10px;font-size:14px;cursor:pointer}
 .btn-upload{background:#1e3a5f;border-color:#4a7c9c}
-.btn-api{background:#2e5a1e;border-color:#5a8c3e}
-.month-title{display:flex;gap:20px;font-size:22px;font-weight:700;color:var(--accent); justify-content:center; flex:1}
-.summary{text-align:center;font-size:14px;line-height:1.45; margin-bottom:8px}
+.btn-connect{background:#1a3a1a;border-color:#4a8c4a}
+.btn-settings{background:#2a1e3a;border-color:#7c4a9c}
+.btn-danger{background:#3a1a1a;border-color:#9c4a4a}
+.month-title{display:flex;gap:20px;font-size:22px;font-weight:700;color:var(--accent);justify-content:center;flex:1}
+.summary{text-align:center;font-size:14px;line-height:1.45;margin-bottom:8px}
 .summary .value{font-weight:700}
 .summary .value.positive{color:#9bd28e}
 .summary .value.negative{color:#ff6b6b}
@@ -31,12 +33,12 @@
 .day-number{position:absolute;top:4px;right:8px;color:#d6dde8;font-size:14px}
 .day-box{color:var(--oktext);padding:6px 4px;font-size:12px;line-height:1.3;text-align:center;border-radius:6px}
 .day-box.positive{background:var(--ok)}
-.day-box.negative{background:var(--bad); color:var(--badtext)}
+.day-box.negative{background:var(--bad);color:var(--badtext)}
 .day-box div{margin:2px 0}
 .hidden{display:none !important}
 .detail{display:flex;flex-direction:column;gap:10px}
 .detail-card{background:var(--ok);color:var(--oktext);border-radius:6px;padding:12px;text-align:center;font-size:16px;line-height:1.5;margin-bottom:8px}
-.detail-card.negative{background:var(--bad); color:var(--badtext)}
+.detail-card.negative{background:var(--bad);color:var(--badtext)}
 .table-wrap{overflow:auto;border:1px solid #333;max-height:70vh}
 table{width:100%;border-collapse:collapse;min-width:1180px;font-size:13px}
 th,td{border:1px solid #2e2e2e;padding:6px 8px;white-space:nowrap;text-align:left}
@@ -47,32 +49,116 @@ th{color:#d4cc57;background:#111}
 .muted{color:var(--muted)}
 .conn{font-weight:700}
 .ok{color:#9bd28e}
-.trade-positive{background-color: rgba(68, 148, 68, 0.3)}
-.trade-negative{background-color: rgba(200, 60, 60, 0.3)}
+.trade-positive{background-color:rgba(68,148,68,0.3)}
+.trade-negative{background-color:rgba(200,60,60,0.3)}
+
+/* === API BAR === */
+.api-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 10px;background:#0d0d0d;border:1px solid #333;border-radius:6px}
+.api-status{font-size:13px;flex:1;min-width:120px}
+.api-status.disconnected{color:#888}
+.api-status.connecting{color:#f3d279}
+.api-status.connected{color:#9bd28e;font-weight:700}
+.api-status.error{color:#ff6b6b}
+
+/* === SETTINGS PANEL === */
+.settings-panel{background:#0d0d0d;border:1px solid #444;border-radius:6px;padding:14px;display:flex;flex-direction:column;gap:10px}
+.settings-panel h3{margin:0;font-size:15px;color:var(--accent)}
+.settings-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.settings-row label{font-size:13px;color:#bbb;min-width:120px}
+.settings-row input{background:#111;color:#fff;border:1px solid #555;border-radius:4px;padding:6px 8px;font-size:13px;flex:1;min-width:200px}
+.settings-note{font-size:12px;color:#888;line-height:1.4}
+.settings-note a{color:var(--accent)}
+.settings-divider{border:none;border-top:1px solid #333;margin:4px 0}
+
+/* === LOADING OVERLAY === */
+.loading-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:999;gap:16px}
+.loading-spinner{width:40px;height:40px;border:3px solid #333;border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite}
+.loading-text{color:#f3d279;font-size:16px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
 @media (max-width:768px){.month-title{font-size:18px;gap:12px}.cell{min-height:92px;padding-top:24px}.day-box{font-size:10px}.weekday{font-size:12px}}
 </style>
 </head>
 <body>
 <div class="app">
-  <div id="warning" class="warn">🔄 Carregando dados automaticamente...</div>
+
+  <!-- LOADING OVERLAY -->
+  <div id="loadingOverlay" class="loading-overlay hidden">
+    <div class="loading-spinner"></div>
+    <div class="loading-text" id="loadingText">Conectando...</div>
+  </div>
+
+  <!-- API BAR -->
+  <div class="api-bar">
+    <span id="connStatus" class="api-status disconnected">⚪ API não configurada</span>
+    <button class="btn btn-settings" id="btnSettings">⚙️ Configurar API</button>
+    <button class="btn btn-connect hidden" id="btnConnect">🔗 Conectar cTrader</button>
+    <button class="btn btn-connect hidden" id="btnRefresh">🔄 Atualizar dados</button>
+    <button class="btn btn-danger hidden" id="btnClearToken">🗑️ Limpar token</button>
+    <label class="btn btn-upload" style="display:inline-flex;align-items:center;cursor:pointer;">
+      📂 Excel (backup)
+      <input type="file" id="excelUpload" accept=".xlsx,.xls" style="display:none;" />
+    </label>
+  </div>
+
+  <!-- SETTINGS PANEL -->
+  <div id="settingsPanel" class="settings-panel hidden">
+    <h3>⚙️ Configuração da API cTrader</h3>
+
+    <!-- Credentials -->
+    <div class="settings-row">
+      <label>Client ID:</label>
+      <input id="cfgClientId" type="text" placeholder="Client ID do seu app" />
+    </div>
+    <div class="settings-row">
+      <label>Client Secret:</label>
+      <input id="cfgClientSecret" type="password" placeholder="Client Secret do seu app" />
+    </div>
+
+    <hr class="settings-divider" />
+    <div class="settings-note" style="color:#f3d279;font-weight:700">⚡ Você já tem tokens? Cole diretamente abaixo (mais rápido!):</div>
+
+    <!-- Direct token entry (from Playground) -->
+    <div class="settings-row">
+      <label>Access Token:</label>
+      <input id="cfgAccessToken" type="password" placeholder="Cole seu Access Token aqui" />
+    </div>
+    <div class="settings-row">
+      <label>Refresh Token:</label>
+      <input id="cfgRefreshToken" type="password" placeholder="Cole seu Refresh Token aqui (opcional)" />
+    </div>
+
+    <hr class="settings-divider" />
+    <div class="settings-note">
+      📋 <b>Como encontrar:</b> <a href="https://openapi.ctrader.com/apps/29161/playground" target="_blank">Playground do seu app</a> → faça login → copie o <b>Access Token</b> e <b>Refresh Token</b> exibidos.<br/>
+      🔑 Ou clique em <b>Salvar e Conectar via OAuth</b> para autorizar automaticamente (você será redirecionado e voltará).<br/>
+      ⏱️ Access Token dura ~30 dias. Refresh Token não expira — guarde-o!<br/>
+      🔒 Escopo necessário: <b>trading</b> (para ler histórico de deals).
+    </div>
+    <div class="settings-row" style="gap:12px">
+      <button class="btn btn-connect" id="btnSaveSettings">💾 Salvar tokens</button>
+      <button class="btn btn-settings" id="btnSaveAndConnect">🔗 Salvar e Conectar via OAuth</button>
+    </div>
+  </div>
+
+  <!-- EXISTING: Warning -->
+  <div id="warning" class="warn">📁 Configure a API (botão ⚙️) ou faça Upload do Excel para carregar os trades.</div>
+
+  <!-- EXISTING: Month view -->
   <div id="monthView">
     <div class="topbar">
       <div>
         <button class="btn" id="prevMonth">◀</button>
         <button class="btn" id="currentMonthBtn">Mês atual</button>
         <button class="btn" id="nextMonth">▶</button>
-        <label class="btn btn-upload" style="display:inline-block; cursor:pointer;">📂 Upload Excel
-          <input type="file" id="excelUpload" accept=".xlsx, .xls" style="display:none;" />
-        </label>
-        <button class="btn btn-api" id="apiLoadBtn">🔄 Recarregar JSON</button>
+      </div>
+      <div class="filters" style="flex:1;justify-content:flex-end">
+        <select id="symbolFilter"><option value="">Símbolo: todos</option></select>
+        <select id="channelFilter"><option value="">Canal: todos</option></select>
+        <select id="labelFilter"><option value="">Label: todos</option></select>
+        <button class="btn" id="clearFiltersBtn">Limpar filtro</button>
       </div>
       <div class="muted" id="statusText">Aguardando dados</div>
-    </div>
-    <div class="filters">
-      <select id="symbolFilter"><option value="">Símbolo: todos</option></select>
-      <select id="channelFilter"><option value="">Canal: todos</option></select>
-      <select id="labelFilter"><option value="">Label: todos</option></select>
-      <button class="btn" id="clearFiltersBtn">Limpar filtro</button>
     </div>
     <div class="title-row">
       <div class="month-title"><span id="yearText"></span> <span id="monthText"></span></div>
@@ -80,50 +166,527 @@ th{color:#d4cc57;background:#111}
     <div class="summary" id="summaryBox"></div>
     <div class="calendar" id="calendar"></div>
   </div>
+
+  <!-- EXISTING: Day view -->
   <div id="dayView" class="detail hidden">
-    <div class="detail-head"><button class="btn" id="backBtn">← Voltar</button><div id="dayTitle" style="font-size:18px;font-weight:700"></div></div>
+    <div class="detail-head">
+      <button class="btn" id="backBtn">← Voltar</button>
+      <div id="dayTitle" style="font-size:18px;font-weight:700"></div>
+    </div>
     <div class="detail-card" id="daySummary"></div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr><th>ID</th><th>Channel</th><th>Label</th><th>Order ID</th><th>Symbol</th><th>Abertura</th><th>Fechamento</th><th>Horário abertura</th><th>Horário fechamento</th><th>Volume req.</th><th>Qtd fechada</th><th>Preço entrada</th><th>Vol fechado</th><th>Preço saída</th><th>Swap</th><th>Comissão</th><th>Pips</th><th>Gross</th><th>Net</th><th>Saldo (real)</th>
+          </tr>
         </thead>
         <tbody id="detailBody"></tbody>
       </table>
     </div>
   </div>
 </div>
-<script>
-// ============================================
-// URL do arquivo JSON gerado pelo GitHub Actions
-// ============================================
-const API_TRADES_URL = 'trades.json'; // mesmo diretório do GitHub Pages
 
-const MONTHS = ['JANEIRO','FEVEREIRO','MARÇO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO']; 
+<script>
+// =============================================
+// === CONSTANTS & CONFIG
+// =============================================
+const MONTHS = ['JANEIRO','FEVEREIRO','MARÇO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO'];
 const WEEKDAYS = ['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado'];
 
-let allTrades = [];
-let currentDate = new Date();
-
-const els = {
-  warning: document.getElementById('warning'),
-  statusText: document.getElementById('statusText'),
-  monthView: document.getElementById('monthView'),
-  dayView: document.getElementById('dayView'),
-  calendar: document.getElementById('calendar'),
-  summaryBox: document.getElementById('summaryBox'),
-  yearText: document.getElementById('yearText'),
-  monthText: document.getElementById('monthText'),
-  dayTitle: document.getElementById('dayTitle'),
-  daySummary: document.getElementById('daySummary'),
-  detailBody: document.getElementById('detailBody'),
-  symbolFilter: document.getElementById('symbolFilter'),
-  channelFilter: document.getElementById('channelFilter'),
-  labelFilter: document.getElementById('labelFilter'),
-  apiLoadBtn: document.getElementById('apiLoadBtn')
+// cTrader Open API constants
+const OAUTH = {
+  authUrl: 'https://id.ctrader.com/my/settings/openapi/grantingaccess/',
+  tokenUrl: 'https://openapi.ctrader.com/apps/token',
+  redirectUri: 'https://castro-odinan.github.io/painelctraderauto/index.html',
+  scope: 'trading'
 };
 
-// ---- UTILIDADES (originais) ----
+const WS_URL = 'wss://live.ctraderapi.com:5036';
+
+// Payload types (ProtoOAPayloadType)
+const PT = {
+  HEARTBEAT:        51,    // ProtoHeartbeatEvent
+  APP_AUTH_REQ:   2100,    // ProtoOAApplicationAuthReq
+  APP_AUTH_RES:   2101,    // ProtoOAApplicationAuthRes
+  ACCT_AUTH_REQ:  2102,    // ProtoOAAccountAuthReq
+  ACCT_AUTH_RES:  2103,    // ProtoOAAccountAuthRes
+  SYMBOLS_REQ:    2114,    // ProtoOASymbolsListReq
+  SYMBOLS_RES:    2115,    // ProtoOASymbolsListRes
+  DEAL_LIST_REQ:  2133,    // ProtoOADealListReq
+  DEAL_LIST_RES:  2134,    // ProtoOADealListRes
+  GET_ACCTS_REQ:  2150,    // ProtoOAGetAccountListByAccessTokenReq
+  GET_ACCTS_RES:  2151,    // ProtoOAGetAccountListByAccessTokenRes
+  ERROR_RES:      2142     // ProtoOAErrorRes
+};
+
+// =============================================
+// === STATE
+// =============================================
+let allTrades = [];
+let currentDate = new Date();
+let ws = null;
+let heartbeatTimer = null;
+let symbolsMap = {};       // symbolId → symbolName
+let pendingAccountId = null;
+
+const els = {
+  warning:       document.getElementById('warning'),
+  statusText:    document.getElementById('statusText'),
+  monthView:     document.getElementById('monthView'),
+  dayView:       document.getElementById('dayView'),
+  calendar:      document.getElementById('calendar'),
+  summaryBox:    document.getElementById('summaryBox'),
+  yearText:      document.getElementById('yearText'),
+  monthText:     document.getElementById('monthText'),
+  dayTitle:      document.getElementById('dayTitle'),
+  daySummary:    document.getElementById('daySummary'),
+  detailBody:    document.getElementById('detailBody'),
+  symbolFilter:  document.getElementById('symbolFilter'),
+  channelFilter: document.getElementById('channelFilter'),
+  labelFilter:   document.getElementById('labelFilter'),
+  connStatus:    document.getElementById('connStatus'),
+  loadingOverlay:document.getElementById('loadingOverlay'),
+  loadingText:   document.getElementById('loadingText'),
+  settingsPanel: document.getElementById('settingsPanel'),
+  btnSettings:   document.getElementById('btnSettings'),
+  btnConnect:    document.getElementById('btnConnect'),
+  btnRefresh:    document.getElementById('btnRefresh'),
+  btnClearToken: document.getElementById('btnClearToken'),
+};
+
+// =============================================
+// === SETTINGS (localStorage)
+// =============================================
+function loadSettings() {
+  return {
+    clientId:     localStorage.getItem('ct_client_id') || '',
+    clientSecret: localStorage.getItem('ct_client_secret') || '',
+    accessToken:  localStorage.getItem('ct_access_token') || '',
+    refreshToken: localStorage.getItem('ct_refresh_token') || '',
+    tokenExpires: parseInt(localStorage.getItem('ct_token_expires') || '0'),
+    accountId:    localStorage.getItem('ct_account_id') || ''
+  };
+}
+
+function saveTokens(accessToken, refreshToken, expiresIn) {
+  localStorage.setItem('ct_access_token', accessToken);
+  if (refreshToken) localStorage.setItem('ct_refresh_token', refreshToken);
+  localStorage.setItem('ct_token_expires', String(Date.now() + expiresIn * 1000));
+}
+
+function clearTokens() {
+  ['ct_access_token','ct_refresh_token','ct_token_expires','ct_account_id'].forEach(k => localStorage.removeItem(k));
+}
+
+function isTokenValid() {
+  const s = loadSettings();
+  return s.accessToken && s.tokenExpires > Date.now() + 60000;
+}
+
+// =============================================
+// === UI HELPERS
+// =============================================
+function setStatus(text, type='disconnected') {
+  els.connStatus.textContent = text;
+  els.connStatus.className = 'api-status ' + type;
+}
+
+function showLoading(text) {
+  els.loadingText.textContent = text;
+  els.loadingOverlay.classList.remove('hidden');
+}
+
+function hideLoading() {
+  els.loadingOverlay.classList.add('hidden');
+}
+
+function updateButtons() {
+  const s = loadSettings();
+  const hasConfig = s.clientId && s.clientSecret;
+  const hasToken = isTokenValid() || s.refreshToken;
+  els.btnConnect.classList.toggle('hidden', !hasConfig || hasToken);
+  els.btnRefresh.classList.toggle('hidden', !hasToken);
+  els.btnClearToken.classList.toggle('hidden', !hasToken);
+}
+
+// =============================================
+// === OAUTH FLOW
+// =============================================
+function startOAuth() {
+  const s = loadSettings();
+  if (!s.clientId || !s.clientSecret) {
+    alert('Configure Client ID e Client Secret primeiro (botão ⚙️)');
+    return;
+  }
+  const params = new URLSearchParams({
+    client_id: s.clientId,
+    redirect_uri: OAUTH.redirectUri,
+    scope: OAUTH.scope,
+    product: 'web'
+  });
+  window.location.href = OAUTH.authUrl + '?' + params.toString();
+}
+
+async function handleOAuthCallback(code) {
+  showLoading('Trocando código por token...');
+  setStatus('⏳ Autenticando...', 'connecting');
+  const s = loadSettings();
+  try {
+    const url = `${OAUTH.tokenUrl}?grant_type=authorization_code&code=${encodeURIComponent(code)}&redirect_uri=${encodeURIComponent(OAUTH.redirectUri)}&client_id=${encodeURIComponent(s.clientId)}&client_secret=${encodeURIComponent(s.clientSecret)}`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    if (data.accessToken || data.access_token) {
+      const token = data.accessToken || data.access_token;
+      const refresh = data.refreshToken || data.refresh_token || '';
+      const expires = data.expiresIn || data.expires_in || 2628000;
+      saveTokens(token, refresh, expires);
+      // Clean URL
+      window.history.replaceState({}, '', OAUTH.redirectUri);
+      setStatus('✅ Token obtido! Conectando ao WebSocket...', 'connected');
+      updateButtons();
+      hideLoading();
+      await connectAndLoad();
+    } else {
+      throw new Error(JSON.stringify(data));
+    }
+  } catch(e) {
+    hideLoading();
+    setStatus('❌ Erro na troca de token: ' + e.message, 'error');
+    console.error('Token exchange error:', e);
+    els.warning.innerHTML = `❌ Erro ao trocar código por token: ${e.message}\n\nCertifique-se que seu Client Secret está correto e tente novamente.`;
+  }
+}
+
+async function refreshAccessToken() {
+  const s = loadSettings();
+  if (!s.refreshToken) return false;
+  try {
+    const url = `${OAUTH.tokenUrl}?grant_type=refresh_token&refresh_token=${encodeURIComponent(s.refreshToken)}&client_id=${encodeURIComponent(s.clientId)}&client_secret=${encodeURIComponent(s.clientSecret)}`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    if (data.accessToken || data.access_token) {
+      const token = data.accessToken || data.access_token;
+      const refresh = data.refreshToken || data.refresh_token || s.refreshToken;
+      const expires = data.expiresIn || data.expires_in || 2628000;
+      saveTokens(token, refresh, expires);
+      return true;
+    }
+    return false;
+  } catch(e) {
+    console.error('Refresh token error:', e);
+    return false;
+  }
+}
+
+// =============================================
+// === WEBSOCKET CONNECTION
+// =============================================
+function wsSend(ws, payloadType, payload, clientMsgId) {
+  const msg = { payloadType, payload };
+  if (clientMsgId) msg.clientMsgId = clientMsgId;
+  ws.send(JSON.stringify(msg));
+}
+
+async function connectAndLoad() {
+  if (!isTokenValid()) {
+    showLoading('Renovando token...');
+    const ok = await refreshAccessToken();
+    if (!ok) {
+      hideLoading();
+      setStatus('⚠️ Token expirado. Clique em Conectar para reautorizar.', 'error');
+      updateButtons();
+      return;
+    }
+  }
+
+  const s = loadSettings();
+  showLoading('Conectando ao servidor cTrader...');
+  setStatus('⏳ Conectando...', 'connecting');
+
+  try {
+    ws = new WebSocket(WS_URL);
+    ws.onopen = () => {
+      setStatus('⏳ Autenticando app...', 'connecting');
+      showLoading('Autenticando aplicação...');
+      // Step 1: Authenticate application
+      wsSend(ws, PT.APP_AUTH_REQ, {
+        clientId: s.clientId,
+        clientSecret: s.clientSecret
+      }, 'app_auth');
+      // Heartbeat every 25s to keep connection alive
+      heartbeatTimer = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          wsSend(ws, PT.HEARTBEAT, {}, 'hb');
+        }
+      }, 25000);
+    };
+
+    ws.onmessage = (event) => handleWsMessage(JSON.parse(event.data));
+
+    ws.onerror = (e) => {
+      hideLoading();
+      setStatus('❌ Erro WebSocket. Verifique a conexão.', 'error');
+      console.error('WebSocket error:', e);
+    };
+
+    ws.onclose = (e) => {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+      if (e.code !== 1000) {
+        setStatus('⚠️ Conexão encerrada (código ' + e.code + '). Use Atualizar.', 'error');
+      }
+    };
+
+  } catch(e) {
+    hideLoading();
+    setStatus('❌ Erro ao conectar: ' + e.message, 'error');
+  }
+}
+
+let wsState = 'idle'; // idle → app_auth → get_accts → acct_auth → symbols → deals
+let dealsAccum = [];
+
+function handleWsMessage(msg) {
+  const type = msg.payloadType;
+  const payload = msg.payload || {};
+
+  // Always respond to heartbeats
+  if (type === PT.HEARTBEAT) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      wsSend(ws, PT.HEARTBEAT, {}, 'hb_reply');
+    }
+    return;
+  }
+
+  if (type === PT.ERROR_RES) {
+    hideLoading();
+    const errCode = payload.errorCode || 'UNKNOWN';
+    const desc = payload.description || '';
+    setStatus(`❌ Erro API: ${errCode}`, 'error');
+    els.warning.innerHTML = `❌ Erro da API cTrader: ${errCode} — ${desc}`;
+    console.error('API error:', msg);
+    return;
+  }
+
+  const s = loadSettings();
+
+  switch(type) {
+    case PT.APP_AUTH_RES:
+      // Step 2: Get account list
+      wsState = 'get_accts';
+      showLoading('Obtendo lista de contas...');
+      wsSend(ws, PT.GET_ACCTS_REQ, { accessToken: s.accessToken }, 'get_accts');
+      break;
+
+    case PT.GET_ACCTS_RES: {
+      // Step 3: Authenticate the trading account
+      const accounts = payload.ctidTraderAccount || [];
+      if (!accounts.length) {
+        hideLoading();
+        setStatus('⚠️ Nenhuma conta encontrada para este token.', 'error');
+        return;
+      }
+      // Use stored accountId or first live account
+      let account = accounts.find(a => a.isLive) || accounts[0];
+      const storedId = s.accountId;
+      if (storedId) {
+        const found = accounts.find(a => String(a.ctidTraderAccountId) === storedId);
+        if (found) account = found;
+      }
+      pendingAccountId = account.ctidTraderAccountId;
+      localStorage.setItem('ct_account_id', String(pendingAccountId));
+      const login = account.traderLogin || pendingAccountId;
+      showLoading(`Autenticando conta ${login}...`);
+      wsState = 'acct_auth';
+      wsSend(ws, PT.ACCT_AUTH_REQ, {
+        ctidTraderAccountId: pendingAccountId,
+        accessToken: s.accessToken
+      }, 'acct_auth');
+      break;
+    }
+
+    case PT.ACCT_AUTH_RES:
+      // Step 4: Get symbols
+      wsState = 'symbols';
+      showLoading('Carregando símbolos...');
+      wsSend(ws, PT.SYMBOLS_REQ, {
+        ctidTraderAccountId: pendingAccountId
+      }, 'symbols_req');
+      break;
+
+    case PT.SYMBOLS_RES: {
+      // Build symbol map
+      const syms = payload.symbol || [];
+      symbolsMap = {};
+      syms.forEach(s => {
+        if (s.symbolId && s.symbolName) {
+          symbolsMap[s.symbolId] = s.symbolName;
+        }
+      });
+      // Step 5: Fetch deals (last 12 months in chunks)
+      wsState = 'deals';
+      dealsAccum = [];
+      const toMs = Date.now();
+      const fromMs = toMs - (365 * 24 * 60 * 60 * 1000); // 12 months
+      showLoading('Buscando histórico de trades (12 meses)...');
+      wsSend(ws, PT.DEAL_LIST_REQ, {
+        ctidTraderAccountId: pendingAccountId,
+        fromTimestamp: fromMs,
+        toTimestamp: toMs,
+        maxRows: 5000
+      }, 'deals_req');
+      break;
+    }
+
+    case PT.DEAL_LIST_RES: {
+      const deals = payload.deal || [];
+      dealsAccum = dealsAccum.concat(deals);
+      const hasMore = payload.hasMore === true;
+      if (hasMore && deals.length > 0) {
+        // Fetch more: advance from timestamp
+        const lastDeal = deals[deals.length - 1];
+        const lastTs = parseInt(lastDeal.executionTimestamp || lastDeal.utcLastUpdateTimestamp || 0);
+        if (lastTs > 0) {
+          showLoading(`Buscando mais trades... (${dealsAccum.length} até agora)`);
+          const toMs = Date.now();
+          wsSend(ws, PT.DEAL_LIST_REQ, {
+            ctidTraderAccountId: pendingAccountId,
+            fromTimestamp: lastTs + 1,
+            toTimestamp: toMs,
+            maxRows: 5000
+          }, 'deals_req_more');
+          return;
+        }
+      }
+      // All deals fetched — process them
+      processFetchedDeals(dealsAccum);
+      // Close WebSocket gracefully
+      if (ws) { ws.close(1000, 'Done'); ws = null; }
+      clearInterval(heartbeatTimer);
+      break;
+    }
+  }
+}
+
+// =============================================
+// === DEAL NORMALIZATION (API → Internal)
+// =============================================
+function normalizeApiDeal(deal) {
+  if (!deal.closePositionDetail) return null; // Only closing deals have P&L
+
+  const cpd = deal.closePositionDetail;
+
+  // Time — API returns milliseconds as numbers or strings
+  const execMs  = Number(deal.executionTimestamp || deal.utcLastUpdateTimestamp || 0);
+  if (!execMs) return null;
+
+  // Convert UTC → UTC+2 (cTrader platform timezone, matching Excel export)
+  const execUtc2 = new Date(execMs + 2 * 3600000);
+
+  // Opening time: not directly available in deal — use createTimestamp if present
+  const openMs = Number(deal.createTimestamp || execMs);
+  const openUtc2 = new Date(openMs + 2 * 3600000);
+
+  // Symbol name
+  const symId = deal.symbolId;
+  const symName = symbolsMap[symId] || (symId ? `SYM_${symId}` : '?');
+
+  // Trade direction
+  // tradeSide can be a string ("BUY"/"SELL") or number (1=SELL, 2=BUY in some versions)
+  const ts = String(deal.tradeSide || '').toUpperCase();
+  const isCloseBuy = (ts === 'BUY' || ts === '2');
+  const closingDir = isCloseBuy ? 'Buy' : 'Sell';
+  const openingDir = isCloseBuy ? 'Sell' : 'Buy';
+
+  // Financial values — may be floats (USD) or integers (cents)
+  // We use a helper that auto-detects cents vs. dollars
+  const gross      = parseMoney(cpd.grossProfit);
+  const swap       = parseMoney(cpd.swap);
+  const commission = parseMoney(cpd.commission);
+  const balance    = parseMoney(cpd.balance);
+  const entryPrice = parseFloat(cpd.entryPrice || 0);
+  const closePrice = parseFloat(deal.executionPrice || 0);
+  const net        = gross + swap + commission;
+
+  // Pips — usually a small integer or float
+  const pips = parseFloat(cpd.pips || 0);
+
+  // Volume — filledVolume is in "volume cents" (100 = 0.01 lots for standard instruments)
+  const filledVol = Number(deal.filledVolume || cpd.closedVolume || 0);
+  const closingQty = filledVol / 100; // lots
+
+  return {
+    id: String(deal.dealId || ''),
+    channel: deal.channel || deal.applicationName || '',
+    label: deal.label || '',
+    orderId: deal.orderId ? 'OID' + deal.orderId : '',
+    symbol: symName,
+    openingSide: openingDir,
+    closingSide: closingDir,
+    closingYear:  execUtc2.getUTCFullYear(),
+    closingMonth: execUtc2.getUTCMonth() + 1,
+    closingDay:   execUtc2.getUTCDate(),
+    openingYear:  openUtc2.getUTCFullYear(),
+    openingMonth: openUtc2.getUTCMonth() + 1,
+    openingDay:   openUtc2.getUTCDate(),
+    closingTime:  new Date(execMs),
+    openingTime:  new Date(openMs),
+    requestedVolume: closingQty,
+    closingQuantity: closingQty,
+    entryPrice:   entryPrice,
+    closingVolume: closingQty,
+    closingPrice:  closePrice,
+    swap:          swap,
+    commission:    commission,
+    pips:          pips,
+    gross:         gross,
+    net:           net,
+    balance:       balance
+  };
+}
+
+/**
+ * Auto-detects if a financial value is in cents or dollars.
+ * Values like 921228 for ~$9212 balance indicate cents (divide by 100).
+ * Values like 9212.28 are already in dollars.
+ */
+function parseMoney(v) {
+  if (v === undefined || v === null) return 0;
+  const n = parseFloat(v);
+  if (isNaN(n)) return 0;
+  // Heuristic: if integer and abs value > 10000, likely in cents
+  // (smallest real balance/profit in normal trading is > $0.01 = 1 cent)
+  if (Number.isInteger(n) && Math.abs(n) > 10000) return n / 100;
+  return n;
+}
+
+function processFetchedDeals(rawDeals) {
+  const normalized = rawDeals
+    .map(normalizeApiDeal)
+    .filter(t => t !== null);
+
+  if (!normalized.length) {
+    hideLoading();
+    setStatus('⚠️ Nenhum trade encontrado nos últimos 12 meses.', 'error');
+    els.warning.innerHTML = '⚠️ Nenhum trade encontrado. Verifique se a conta correta está autorizada.';
+    return;
+  }
+
+  allTrades = normalized;
+  hideLoading();
+  setStatus(`✅ ${allTrades.length} trades | Conta ${pendingAccountId}`, 'connected');
+  els.statusText.innerHTML = `<span class="conn ok">✅ ${allTrades.length} trades via API</span>`;
+  els.warning.innerHTML = `📊 ${allTrades.length} trades carregados via API. Dados atualizados automaticamente.`;
+  refillAllFilters();
+  renderMonth();
+  updateButtons();
+}
+
+// =============================================
+// === EXISTING: NUMBER PARSING
+// =============================================
 function parseNumber(str) {
   if (str === undefined || str === null) return 0;
   if (typeof str === 'number') return str;
@@ -146,136 +709,85 @@ function findColumn(row, possibleNames) {
   return undefined;
 }
 
-// Converte string do Excel (UTC+2) para UTC (mantido para fallback)
 function parseTradeDateTime(value) {
   if (!value) return null;
   let s = String(value).trim();
   let m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})\.(\d+)/);
   if (m) {
-    let day = parseInt(m[1], 10);
-    let month = parseInt(m[2], 10);
-    let year = parseInt(m[3], 10);
-    let hour = parseInt(m[4], 10);
-    let minute = parseInt(m[5], 10);
-    let second = parseInt(m[6], 10);
-    let ms = parseInt(m[7], 10);
-    let utcHour = hour - 2;
-    let utcDay = day;
-    let utcMonth = month;
-    let utcYear = year;
+    let day = parseInt(m[1],10), month = parseInt(m[2],10), year = parseInt(m[3],10);
+    let hour = parseInt(m[4],10), minute = parseInt(m[5],10), second = parseInt(m[6],10), ms = parseInt(m[7],10);
+    let utcHour = hour - 2, utcDay = day, utcMonth = month, utcYear = year;
     if (utcHour < 0) {
       utcHour += 24;
-      let prevDate = new Date(Date.UTC(year, month-1, day - 1));
-      utcDay = prevDate.getUTCDate();
-      utcMonth = prevDate.getUTCMonth() + 1;
-      utcYear = prevDate.getUTCFullYear();
+      let prevDate = new Date(Date.UTC(year, month-1, day-1));
+      utcDay = prevDate.getUTCDate(); utcMonth = prevDate.getUTCMonth()+1; utcYear = prevDate.getUTCFullYear();
     }
     let dateObj = new Date(Date.UTC(utcYear, utcMonth-1, utcDay, utcHour, minute, second, ms));
-    return {
-      originalYear: year,
-      originalMonth: month,
-      originalDay: day,
-      originalHour: hour,
-      dateObj: dateObj
-    };
+    return { originalYear: year, originalMonth: month, originalDay: day, originalHour: hour, dateObj };
   }
   return null;
 }
 
 function normalizeTrade(row) {
-  const closing = parseTradeDateTime(findColumn(row, ['Closing time', 'closingTime', 'Close time']));
-  const opening = parseTradeDateTime(findColumn(row, ['Opening time', 'openingTime', 'Open time']));
+  const closing = parseTradeDateTime(findColumn(row, ['Closing time','closingTime','Close time']));
+  const opening = parseTradeDateTime(findColumn(row, ['Opening time','openingTime','Open time']));
   if (!closing) return null;
   return {
-    id: findColumn(row, ['ID', 'Id']) || '',
-    channel: findColumn(row, ['Channel', 'channel']) || '',
-    label: findColumn(row, ['Label', 'label']) || '',
-    orderId: findColumn(row, ['Order ID', 'OrderId', 'orderId']) || '',
-    symbol: findColumn(row, ['Symbol', 'symbol']) || '',
-    openingSide: findColumn(row, ['Opening direction', 'openingDirection']) || '',
-    closingSide: findColumn(row, ['Closing direction', 'closingDirection']) || '',
-    closingYear: closing.originalYear,
-    closingMonth: closing.originalMonth,
-    closingDay: closing.originalDay,
+    id: findColumn(row, ['ID','Id']) || '',
+    channel: findColumn(row, ['Channel','channel']) || '',
+    label: findColumn(row, ['Label','label']) || '',
+    orderId: findColumn(row, ['Order ID','OrderId','orderId']) || '',
+    symbol: findColumn(row, ['Symbol','symbol']) || '',
+    openingSide: findColumn(row, ['Opening direction','openingDirection']) || '',
+    closingSide: findColumn(row, ['Closing direction','closingDirection']) || '',
+    closingYear: closing.originalYear, closingMonth: closing.originalMonth, closingDay: closing.originalDay,
     openingYear: opening ? opening.originalYear : closing.originalYear,
     openingMonth: opening ? opening.originalMonth : closing.originalMonth,
     openingDay: opening ? opening.originalDay : closing.originalDay,
-    closingTime: closing.dateObj,
-    openingTime: opening ? opening.dateObj : closing.dateObj,
-    requestedVolume: parseNumber(findColumn(row, ['Requested quantity', 'requestedVolume'])),
-    closingQuantity: parseNumber(findColumn(row, ['Closing Quantity', 'closingQuantity'])),
-    entryPrice: parseNumber(findColumn(row, ['Entry price', 'entryPrice'])),
-    closingVolume: parseNumber(findColumn(row, ['Closing volume', 'closingVolume'])),
-    closingPrice: parseNumber(findColumn(row, ['Closing price', 'closingPrice'])),
-    swap: parseNumber(findColumn(row, ['Swap', 'swap'])),
-    commission: parseNumber(findColumn(row, ['Commission', 'commission'])),
-    pips: parseNumber(findColumn(row, ['Pips', 'pips'])),
-    gross: parseNumber(findColumn(row, ['Gross $', 'gross'])),
-    net: parseNumber(findColumn(row, ['Net $', 'net'])),
-    balance: parseNumber(findColumn(row, ['Balance $', 'balance']))
+    closingTime: closing.dateObj, openingTime: opening ? opening.dateObj : closing.dateObj,
+    requestedVolume: parseNumber(findColumn(row, ['Requested quantity','requestedVolume'])),
+    closingQuantity: parseNumber(findColumn(row, ['Closing Quantity','closingQuantity'])),
+    entryPrice: parseNumber(findColumn(row, ['Entry price','entryPrice'])),
+    closingVolume: parseNumber(findColumn(row, ['Closing volume','closingVolume'])),
+    closingPrice: parseNumber(findColumn(row, ['Closing price','closingPrice'])),
+    swap: parseNumber(findColumn(row, ['Swap','swap'])),
+    commission: parseNumber(findColumn(row, ['Commission','commission'])),
+    pips: parseNumber(findColumn(row, ['Pips','pips'])),
+    gross: parseNumber(findColumn(row, ['Gross $','gross'])),
+    net: parseNumber(findColumn(row, ['Net $','net'])),
+    balance: parseNumber(findColumn(row, ['Balance $','balance']))
   };
 }
 
-// Normaliza trades vindos do JSON (já formatado pelo GitHub Actions)
-function normalizeTradeFromJSON(trade) {
-  // O JSON já vem com closingTime/openingTime em ISO, basta converter para Date
-  return {
-    ...trade,
-    closingTime: new Date(trade.closingTime),
-    openingTime: new Date(trade.openingTime)
-  };
-}
-
-function applyIncomingData(tradesArray, isFromJSON = false) {
+function applyIncomingData(tradesArray) {
   if (!Array.isArray(tradesArray)) return;
-  let normalized;
-  if (isFromJSON) {
-    normalized = tradesArray.map(normalizeTradeFromJSON).filter(t => t && !isNaN(t.closingTime.getTime()));
-  } else {
-    normalized = tradesArray.map(normalizeTrade).filter(t => t !== null);
-  }
+  const normalized = tradesArray.map(normalizeTrade).filter(t => t !== null);
   if (normalized.length) {
     allTrades = normalized;
-    els.statusText.innerHTML = `<span class="conn ok">✅ ${allTrades.length} trades carregados</span>`;
+    els.statusText.innerHTML = `<span class="conn ok">✅ ${allTrades.length} trades (Excel)</span>`;
     els.warning.innerHTML = `📊 ${allTrades.length} trades carregados. Use os filtros e navegue pelos meses.`;
-    refillAllFilters();
-    renderMonth();
+    refillAllFilters(); renderMonth();
   } else {
-    els.warning.innerHTML = '⚠️ Nenhum trade válido encontrado. Verifique a fonte dos dados.';
+    els.warning.innerHTML = '⚠️ Nenhum trade válido encontrado. Verifique o formato da planilha.';
   }
 }
 
-// --- UPLOAD EXCEL (mantido) ---
 function handleExcelUpload(file) {
   const reader = new FileReader();
   reader.onload = function(e) {
     const data = new Uint8Array(e.target.result);
-    const workbook = XLSX.read(data, { type: 'array' });
-    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(firstSheet);
-    if (!rows.length) {
-      els.warning.innerHTML = 'Arquivo vazio ou sem dados.';
-      return;
-    }
-    applyIncomingData(rows, false);
+    const wb = XLSX.read(data, { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws);
+    if (!rows.length) { els.warning.innerHTML = 'Arquivo vazio ou sem dados.'; return; }
+    applyIncomingData(rows);
   };
   reader.readAsArrayBuffer(file);
 }
 
-// --- CARREGAMENTO AUTOMÁTICO DO JSON ---
-async function loadFromJSON() {
-  els.warning.innerHTML = '🔄 Buscando dados do servidor...';
-  try {
-    const response = await fetch(API_TRADES_URL);
-    if (!response.ok) throw new Error(`Status ${response.status}`);
-    const trades = await response.json();
-    applyIncomingData(trades, true);
-  } catch (err) {
-    els.warning.innerHTML = `❌ Erro ao carregar JSON: ${err.message}. Use o upload manual.`;
-  }
-}
-
-// --- FILTROS (exatamente como original) ---
+// =============================================
+// === EXISTING: FILTERS & CALENDAR
+// =============================================
 function uniqueValues(arr, key) {
   return [...new Set(arr.map(x => x[key]).filter(Boolean))].sort((a,b) => String(a).localeCompare(String(b)));
 }
@@ -285,53 +797,25 @@ function refillFilter(select, label, values) {
   select.innerHTML = `<option value="">${label}: todos</option>`;
   values.forEach(v => {
     const opt = document.createElement('option');
-    opt.value = v;
-    opt.textContent = v;
+    opt.value = v; opt.textContent = v;
     select.appendChild(opt);
   });
-  if (values.includes(current)) {
-    select.value = current;
-  } else {
-    select.value = ""; 
-  }
+  if (values.includes(current)) select.value = current; else select.value = '';
 }
 
 function refillAllFilters() {
-  const y = currentDate.getFullYear();
-  const m = currentDate.getMonth();
-  
-  const monthTrades = allTrades.filter(t => t.closingYear === y && t.closingMonth === m + 1);
-
-  const validSymbols = uniqueValues(monthTrades, 'symbol');
-  const validChannels = uniqueValues(monthTrades, 'channel');
-  const validLabels = uniqueValues(monthTrades, 'label');
-
-  if (!validSymbols.includes(els.symbolFilter.value)) els.symbolFilter.value = "";
-  if (!validChannels.includes(els.channelFilter.value)) els.channelFilter.value = "";
-  if (!validLabels.includes(els.labelFilter.value)) els.labelFilter.value = "";
-
-  const currentSymbol = els.symbolFilter.value;
-  const currentChannel = els.channelFilter.value;
-  const currentLabel = els.labelFilter.value;
-
-  const dataForSymbol = monthTrades.filter(t => 
-    (!currentChannel || t.channel === currentChannel) && 
-    (!currentLabel || t.label === currentLabel)
-  );
-  
-  const dataForChannel = monthTrades.filter(t => 
-    (!currentSymbol || t.symbol === currentSymbol) && 
-    (!currentLabel || t.label === currentLabel)
-  );
-
-  const dataForLabel = monthTrades.filter(t => 
-    (!currentSymbol || t.symbol === currentSymbol) && 
-    (!currentChannel || t.channel === currentChannel)
-  );
-
-  refillFilter(els.symbolFilter, 'Símbolo', uniqueValues(dataForSymbol, 'symbol'));
-  refillFilter(els.channelFilter, 'Canal', uniqueValues(dataForChannel, 'channel'));
-  refillFilter(els.labelFilter, 'Label', uniqueValues(dataForLabel, 'label'));
+  const y = currentDate.getFullYear(), m = currentDate.getMonth();
+  const monthTrades = allTrades.filter(t => t.closingYear === y && t.closingMonth === m+1);
+  const validSymbols = uniqueValues(monthTrades,'symbol');
+  const validChannels = uniqueValues(monthTrades,'channel');
+  const validLabels = uniqueValues(monthTrades,'label');
+  if (!validSymbols.includes(els.symbolFilter.value)) els.symbolFilter.value = '';
+  if (!validChannels.includes(els.channelFilter.value)) els.channelFilter.value = '';
+  if (!validLabels.includes(els.labelFilter.value)) els.labelFilter.value = '';
+  const cs = els.symbolFilter.value, cc = els.channelFilter.value, cl = els.labelFilter.value;
+  refillFilter(els.symbolFilter, 'Símbolo', uniqueValues(monthTrades.filter(t => (!cc||t.channel===cc)&&(!cl||t.label===cl)), 'symbol'));
+  refillFilter(els.channelFilter, 'Canal',   uniqueValues(monthTrades.filter(t => (!cs||t.symbol===cs)&&(!cl||t.label===cl)), 'channel'));
+  refillFilter(els.labelFilter,   'Label',   uniqueValues(monthTrades.filter(t => (!cs||t.symbol===cs)&&(!cc||t.channel===cc)), 'label'));
 }
 
 function applyFilters() {
@@ -344,102 +828,79 @@ function applyFilters() {
 }
 
 function getMonthTrades(y, m) {
-  return applyFilters().filter(t => t.closingYear === y && t.closingMonth === m+1)
-                      .sort((a,b) => a.closingTime - b.closingTime);
+  return applyFilters().filter(t => t.closingYear===y && t.closingMonth===m+1).sort((a,b) => a.closingTime - b.closingTime);
 }
 
 function summarizeMonth(trades) {
   if (!trades.length) return null;
-  const netTotal = trades.reduce((sum, t) => sum + t.net, 0);
-  const primeiroTrade = trades[0];
-  const saldoInicial = primeiroTrade.balance - primeiroTrade.net;
+  const netTotal = trades.reduce((sum,t) => sum+t.net, 0);
+  const saldoInicial = trades[0].balance - trades[0].net;
   const saldoFinal = saldoInicial + netTotal;
-  const resultado = netTotal;
-  const perc = saldoInicial !== 0 ? (resultado / saldoInicial * 100) : 0;
-  return { saldoInicial, saldoFinal, resultado, perc };
+  const perc = saldoInicial !== 0 ? (netTotal/saldoInicial*100) : 0;
+  return { saldoInicial, saldoFinal, resultado: netTotal, perc };
 }
 
 function getDailyMetrics(monthTrades) {
   if (!monthTrades.length) return new Map();
   const sorted = [...monthTrades].sort((a,b) => a.closingTime - b.closingTime);
   const saldoInicialMes = sorted[0].balance - sorted[0].net;
-  let netAcumulado = 0;
   const dayMap = new Map();
   for (let t of sorted) {
     const key = `${t.closingYear}-${String(t.closingMonth).padStart(2,'0')}-${String(t.closingDay).padStart(2,'0')}`;
-    if (!dayMap.has(key)) dayMap.set(key, { netDia: 0, trades: [] });
-    const day = dayMap.get(key);
-    day.netDia += t.net;
-    day.trades.push(t);
+    if (!dayMap.has(key)) dayMap.set(key, { netDia:0, trades:[] });
+    dayMap.get(key).netDia += t.net;
+    dayMap.get(key).trades.push(t);
   }
   const result = new Map();
-  let netAcumuladoAntes = 0;
-  const sortedDays = [...dayMap.keys()].sort();
-  for (let key of sortedDays) {
+  let netAcum = 0;
+  for (let key of [...dayMap.keys()].sort()) {
     const day = dayMap.get(key);
-    const saldoInicioDia = saldoInicialMes + netAcumuladoAntes;
-    const resultadoDia = day.netDia;
-    const saldoFinalDia = saldoInicioDia + resultadoDia;
-    const percDia = saldoInicioDia !== 0 ? (resultadoDia / saldoInicioDia * 100) : 0;
-    const percAcumulado = saldoInicialMes !== 0 ? ((saldoFinalDia - saldoInicialMes) / saldoInicialMes * 100) : 0;
+    const saldoInicio = saldoInicialMes + netAcum;
+    const saldoFinal = saldoInicio + day.netDia;
+    const percDia = saldoInicio !== 0 ? (day.netDia/saldoInicio*100) : 0;
+    const percAcum = saldoInicialMes !== 0 ? ((saldoFinal-saldoInicialMes)/saldoInicialMes*100) : 0;
     result.set(key, {
-      netDia: resultadoDia,
-      saldoFinalDia,
-      percDia,
-      percAcumulado,
-      wins: day.trades.filter(t => t.net > 0).length,
-      losses: day.trades.filter(t => t.net < 0).length,
-      count: day.trades.length,
-      trades: day.trades
+      netDia: day.netDia, saldoFinalDia: saldoFinal, percDia, percAcumulado: percAcum,
+      wins: day.trades.filter(t=>t.net>0).length,
+      losses: day.trades.filter(t=>t.net<0).length,
+      count: day.trades.length, trades: day.trades
     });
-    netAcumuladoAntes += day.netDia;
+    netAcum += day.netDia;
   }
   return result;
 }
 
-function fmt2(n) { return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-function fmtPct(n) { return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + '%'; }
+function fmt2(n) { return n.toLocaleString('pt-BR', { minimumFractionDigits:2, maximumFractionDigits:2 }); }
+function fmtPct(n) { return n.toLocaleString('pt-BR', { minimumFractionDigits:2, maximumFractionDigits:2 }) + '%'; }
 
 function renderMonth() {
   const y = currentDate.getFullYear(), m = currentDate.getMonth();
   const monthTrades = getMonthTrades(y, m);
   const monthSummary = summarizeMonth(monthTrades);
-  
-  els.yearText.textContent = y;
-  els.monthText.textContent = MONTHS[m];
-  
+  els.yearText.textContent = y; els.monthText.textContent = MONTHS[m];
   if (monthSummary) {
-    const resultClass = monthSummary.resultado >= 0 ? 'positive' : 'negative';
+    const rc = monthSummary.resultado >= 0 ? 'positive' : 'negative';
     els.summaryBox.innerHTML = `
       <div><b>SALDO INICIAL DO MÊS:</b> ${fmt2(monthSummary.saldoInicial)}</div>
-      <div><b>RESULTADO DO MÊS:</b> <span class="value ${resultClass}">${fmt2(monthSummary.resultado)} | ${fmtPct(monthSummary.perc)}</span></div>
+      <div><b>RESULTADO DO MÊS:</b> <span class="value ${rc}">${fmt2(monthSummary.resultado)} | ${fmtPct(monthSummary.perc)}</span></div>
       <div><b>SALDO FINAL DO MÊS:</b> ${fmt2(monthSummary.saldoFinal)}</div>
-      <div style="font-size:12px; color:#aaa; margin-top:4px;">⚠️ Depósitos e/ou saques não afetam estes valores</div>
-    `;
+      <div style="font-size:12px;color:#aaa;margin-top:4px">⚠️ Depósitos e/ou saques não afetam estes valores</div>`;
   } else {
     els.summaryBox.innerHTML = `<div class="muted"><b>SEM DADOS</b> para os filtros e mês selecionados.</div>`;
   }
-  
   els.calendar.innerHTML = '';
   WEEKDAYS.forEach(d => {
-    const el = document.createElement('div');
-    el.className = 'weekday';
-    el.textContent = d;
+    const el = document.createElement('div'); el.className='weekday'; el.textContent=d;
     els.calendar.appendChild(el);
   });
-  
-  const firstDay = new Date(y, m, 1);
-  let startWeekDay = firstDay.getDay();
-  const daysInMonth = new Date(y, m+1, 0).getDate();
+  const firstDay = new Date(y,m,1);
+  const startWeekDay = firstDay.getDay();
+  const daysInMonth = new Date(y,m+1,0).getDate();
   const dailyMetrics = getDailyMetrics(monthTrades);
-  
-  for (let i = 0; i < startWeekDay; i++) {
-    const empty = document.createElement('div');
-    empty.className = 'cell empty';
-    els.calendar.appendChild(empty);
+  for (let i=0; i<startWeekDay; i++) {
+    const empty = document.createElement('div'); empty.className='cell empty'; els.calendar.appendChild(empty);
   }
-  
-  for (let day = 1; day <= daysInMonth; day++) {
+  for (let day=1; day<=daysInMonth; day++) {
     const key = `${y}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     const dayInfo = dailyMetrics.get(key);
     const hasTrades = dayInfo && dayInfo.count > 0;
@@ -449,11 +910,9 @@ function renderMonth() {
     if (hasTrades) {
       const box = document.createElement('div');
       box.className = `day-box ${dayInfo.netDia >= 0 ? 'positive' : 'negative'}`;
-      box.innerHTML = `
-        <div>${fmt2(dayInfo.netDia)} | ${fmt2(dayInfo.saldoFinalDia)}</div>
+      box.innerHTML = `<div>${fmt2(dayInfo.netDia)} | ${fmt2(dayInfo.saldoFinalDia)}</div>
         <div>${fmtPct(dayInfo.percDia)} | ${fmtPct(dayInfo.percAcumulado)}</div>
-        <div>${dayInfo.wins}G ${dayInfo.losses}L | ${dayInfo.count} trades</div>
-      `;
+        <div>${dayInfo.wins}G ${dayInfo.losses}L | ${dayInfo.count} trades</div>`;
       cell.appendChild(box);
       cell.addEventListener('click', (function(k, info) {
         return function() { openDay(k, info.trades, info); };
@@ -470,101 +929,160 @@ function formatDateTime(dateObj) {
 
 function openDay(key, trades, dayInfo) {
   const parts = key.split('-');
-  const title = `${parts[2]}/${parts[1]}/${parts[0]}`;
-  els.dayTitle.textContent = `Detalhe do dia ${title}`;
-  const detailCard = els.daySummary;
-  detailCard.className = `detail-card ${dayInfo.netDia >= 0 ? 'positive' : 'negative'}`;
-  detailCard.innerHTML = `
-    <div>${fmt2(dayInfo.netDia)} | ${fmt2(dayInfo.saldoFinalDia)}</div>
+  els.dayTitle.textContent = `Detalhe do dia ${parts[2]}/${parts[1]}/${parts[0]}`;
+  const dc = els.daySummary;
+  dc.className = `detail-card ${dayInfo.netDia >= 0 ? 'positive' : 'negative'}`;
+  dc.innerHTML = `<div>${fmt2(dayInfo.netDia)} | ${fmt2(dayInfo.saldoFinalDia)}</div>
     <div>${fmtPct(dayInfo.percDia)} | ${fmtPct(dayInfo.percAcumulado)}</div>
-    <div>${dayInfo.wins}G ${dayInfo.losses}L | ${dayInfo.count} trades</div>
-  `;
-  
+    <div>${dayInfo.wins}G ${dayInfo.losses}L | ${dayInfo.count} trades</div>`;
   els.detailBody.innerHTML = trades.map(t => {
-    const trClass = t.net >= 0 ? 'trade-positive' : 'trade-negative';
-    return `<tr class="${trClass}">
-      <td>${t.id}</td>
-      <td>${t.channel || ''}</td>
-      <td>${t.label || ''}</td>
-      <td>${t.orderId || ''}</td>
-      <td>${t.symbol || ''}</td>
-      <td>${t.openingSide || ''}</td>
-      <td>${t.closingSide || ''}</td>
-      <td>${formatDateTime(t.openingTime)}</td>
-      <td>${formatDateTime(t.closingTime)}</td>
-      <td class="num">${fmt2(t.requestedVolume)}</td>
-      <td class="num">${fmt2(t.closingQuantity)}</td>
-      <td class="num">${fmt2(t.entryPrice)}</td>
-      <td class="num">${fmt2(t.closingVolume)}</td>
+    const tc = t.net >= 0 ? 'trade-positive' : 'trade-negative';
+    return `<tr class="${tc}">
+      <td>${t.id}</td><td>${t.channel||''}</td><td>${t.label||''}</td><td>${t.orderId||''}</td>
+      <td>${t.symbol||''}</td><td>${t.openingSide||''}</td><td>${t.closingSide||''}</td>
+      <td>${formatDateTime(t.openingTime)}</td><td>${formatDateTime(t.closingTime)}</td>
+      <td class="num">${fmt2(t.requestedVolume)}</td><td class="num">${fmt2(t.closingQuantity)}</td>
+      <td class="num">${fmt2(t.entryPrice)}</td><td class="num">${fmt2(t.closingVolume)}</td>
       <td class="num">${fmt2(t.closingPrice)}</td>
-      <td class="num ${t.swap >= 0 ? 'pos' : 'neg'}">${fmt2(t.swap)}</td>
-      <td class="num ${t.commission >= 0 ? 'pos' : 'neg'}">${fmt2(t.commission)}</td>
-      <td class="num ${t.pips >= 0 ? 'pos' : 'neg'}">${fmt2(t.pips)}</td>
-      <td class="num ${t.gross >= 0 ? 'pos' : 'neg'}">${fmt2(t.gross)}</td>
-      <td class="num ${t.net >= 0 ? 'pos' : 'neg'}">${fmt2(t.net)}</td>
+      <td class="num ${t.swap>=0?'pos':'neg'}">${fmt2(t.swap)}</td>
+      <td class="num ${t.commission>=0?'pos':'neg'}">${fmt2(t.commission)}</td>
+      <td class="num ${t.pips>=0?'pos':'neg'}">${fmt2(t.pips)}</td>
+      <td class="num ${t.gross>=0?'pos':'neg'}">${fmt2(t.gross)}</td>
+      <td class="num ${t.net>=0?'pos':'neg'}">${fmt2(t.net)}</td>
       <td class="num">${fmt2(t.balance)}</td>
     </tr>`;
   }).join('');
-  
   els.monthView.classList.add('hidden');
   els.dayView.classList.remove('hidden');
 }
 
-// ---- EVENTOS ----
+// =============================================
+// === EVENT LISTENERS
+// =============================================
 function initEvents() {
+  // Nav buttons
   document.getElementById('prevMonth').addEventListener('click', () => {
-    currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
-    refillAllFilters();
-    renderMonth();
+    currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth()-1, 1);
+    refillAllFilters(); renderMonth();
   });
   document.getElementById('nextMonth').addEventListener('click', () => {
-    currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
-    refillAllFilters();
-    renderMonth();
+    currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth()+1, 1);
+    refillAllFilters(); renderMonth();
   });
   document.getElementById('currentMonthBtn').addEventListener('click', () => {
     const now = new Date();
     currentDate = new Date(now.getFullYear(), now.getMonth(), 1);
-    refillAllFilters();
-    renderMonth();
+    refillAllFilters(); renderMonth();
   });
-  
   document.getElementById('clearFiltersBtn').addEventListener('click', () => {
-    els.symbolFilter.value = '';
-    els.channelFilter.value = '';
-    els.labelFilter.value = '';
-    refillAllFilters();
-    renderMonth();
+    els.symbolFilter.value = ''; els.channelFilter.value = ''; els.labelFilter.value = '';
+    refillAllFilters(); renderMonth();
   });
   document.getElementById('backBtn').addEventListener('click', () => {
-    els.dayView.classList.add('hidden');
-    els.monthView.classList.remove('hidden');
+    els.dayView.classList.add('hidden'); els.monthView.classList.remove('hidden');
   });
-  
   [els.symbolFilter, els.channelFilter, els.labelFilter].forEach(el => {
     el.addEventListener('change', () => {
       refillAllFilters();
-      els.dayView.classList.add('hidden');
-      els.monthView.classList.remove('hidden');
+      els.dayView.classList.add('hidden'); els.monthView.classList.remove('hidden');
       renderMonth();
     });
   });
-  
-  const fileInput = document.getElementById('excelUpload');
-  fileInput.addEventListener('change', (e) => {
+
+  // Excel upload
+  document.getElementById('excelUpload').addEventListener('change', (e) => {
     if (e.target.files.length) handleExcelUpload(e.target.files[0]);
-    fileInput.value = '';
+    e.target.value = '';
   });
 
-  // Botão de recarregar JSON (ou recarregar os dados)
-  els.apiLoadBtn.addEventListener('click', loadFromJSON);
+  // API buttons
+  els.btnSettings.addEventListener('click', () => {
+    const visible = !els.settingsPanel.classList.contains('hidden');
+    els.settingsPanel.classList.toggle('hidden', visible);
+    if (!visible) {
+      const s = loadSettings();
+      document.getElementById('cfgClientId').value = s.clientId;
+      document.getElementById('cfgClientSecret').value = s.clientSecret;
+      // Don't pre-fill token fields for security — user pastes fresh values
+    }
+  });
+
+  function saveAllSettings() {
+    const cid  = document.getElementById('cfgClientId').value.trim();
+    const csec = document.getElementById('cfgClientSecret').value.trim();
+    const atoken = document.getElementById('cfgAccessToken').value.trim();
+    const rtoken = document.getElementById('cfgRefreshToken').value.trim();
+    if (cid)   localStorage.setItem('ct_client_id', cid);
+    if (csec)  localStorage.setItem('ct_client_secret', csec);
+    if (atoken) {
+      localStorage.setItem('ct_access_token', atoken);
+      // Token from playground — assume ~30 days validity from now
+      localStorage.setItem('ct_token_expires', String(Date.now() + 2628000 * 1000));
+    }
+    if (rtoken) localStorage.setItem('ct_refresh_token', rtoken);
+    els.settingsPanel.classList.add('hidden');
+    return { cid, csec, atoken, rtoken };
+  }
+
+  document.getElementById('btnSaveSettings').addEventListener('click', async () => {
+    const { atoken } = saveAllSettings();
+    if (atoken) {
+      setStatus('✅ Token salvo! Conectando...', 'connecting');
+      updateButtons();
+      await connectAndLoad();
+    } else {
+      setStatus('✅ Configurações salvas. Clique em Conectar.', 'disconnected');
+      updateButtons();
+    }
+  });
+
+  document.getElementById('btnSaveAndConnect').addEventListener('click', () => {
+    saveAllSettings();
+    startOAuth();
+  });
+
+  els.btnConnect.addEventListener('click', startOAuth);
+
+  els.btnRefresh.addEventListener('click', () => connectAndLoad());
+
+  els.btnClearToken.addEventListener('click', () => {
+    if (confirm('Limpar token salvo? Você precisará autorizar novamente.')) {
+      clearTokens();
+      setStatus('⚪ Token removido. Clique em Conectar.', 'disconnected');
+      updateButtons();
+    }
+  });
 }
 
-// Inicialização: tenta carregar o JSON automaticamente
-function init() {
+// =============================================
+// === INIT — check OAuth callback on load
+// =============================================
+async function init() {
   initEvents();
-  loadFromJSON(); // busca o trades.json assim que abrir a página
+  renderMonth();
+
+  // Check if returning from OAuth redirect (?code=...)
+  const urlParams = new URLSearchParams(window.location.search);
+  const code = urlParams.get('code');
+  if (code) {
+    await handleOAuthCallback(code);
+    return;
+  }
+
+  // Check if we have a valid token and auto-load
+  const s = loadSettings();
+  if (s.clientId && s.clientSecret) {
+    setStatus('⚙️ Configurado. ', 'disconnected');
+    if (s.accessToken || s.refreshToken) {
+      setStatus('🔄 Carregando dados automaticamente...', 'connecting');
+      await connectAndLoad();
+    } else {
+      setStatus('⚪ Token não encontrado. Clique em Conectar.', 'disconnected');
+    }
+  }
+  updateButtons();
 }
+
 init();
 </script>
 </body>
