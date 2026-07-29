@@ -532,14 +532,12 @@ function closeAllCDrops(except){
 function renderAcctDropdown(){
   const accts=loadAccts();
   const drop=G('acctDrop');
-  const sync=G('btnSync');
+  updBtns(); // única fonte de verdade pra visibilidade do 🔄
   if(!accts.length){
     drop.style.display='none';
-    if(sync) sync.classList.add('hidden');
     return;
   }
   drop.style.display='';
-  if(sync) sync.classList.remove('hidden');
   if(acctSelIdx<0 || acctSelIdx>=accts.length) acctSelIdx=0;
   const a=accts[acctSelIdx];
   G('acctDropLabel').textContent = a ? `${a.name} (${a.srv.toUpperCase()})` : 'Conta...';
@@ -550,7 +548,6 @@ function renderAcctDropdown(){
   menu.querySelectorAll('.cdrop-item').forEach(el=>{
     el.onclick=()=>{
       const idx=parseInt(el.dataset.idx);
-      const same = (idx===acctSelIdx);
       acctSelIdx=idx;
       const aa=loadAccts()[acctSelIdx];
       G('acctDropLabel').textContent = `${aa.name} (${aa.srv.toUpperCase()})`;
