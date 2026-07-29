@@ -21,16 +21,18 @@
 .value.pos{color:#9bd28e}.value.neg{color:#ff6b6b}
 .calendar{
   display:grid;
-  grid-template-columns:repeat(7,1fr);
-  border:1px solid var(--line);
-  overflow:hidden;
+  grid-template-columns:repeat(7,minmax(0,1fr));
+  width:100%;
+  border-top:1px solid var(--line);
+  border-left:1px solid var(--line);
+  box-sizing:border-box;
 }
 .weekday,.cell{
   border-right:1px solid var(--line);
   border-bottom:1px solid var(--line);
+  min-width:0;
+  overflow:hidden;
 }
-/* remove borda interna duplicada na última coluna (sábado) e última linha */
-.weekday:nth-child(7n),.cell:nth-child(7n){border-right:none}
 
 .weekday{color:#d4cc57;text-align:center;padding:6px 4px;font-size:14px}
 .cell{min-height:112px;position:relative;padding:28px 8px 8px;cursor:pointer}
@@ -74,7 +76,7 @@ th{color:#d4cc57;background:#111;text-align:left}
 .month-title{font-size:18px}
 .cell{min-height:90px;padding-top:22px}
 .day-box{font-size:10px}
-.weekday{font-size:12px}
+.weekday{font-size:11px;padding:6px 2px}
 /* === FIX MOBILE (cTrader Android WebView) === */
 .sr{flex-direction:column;align-items:stretch}
 .sr label{min-width:auto;margin-bottom:2px}
@@ -143,7 +145,6 @@ th{color:#d4cc57;background:#111;text-align:left}
   </div>
   <button class="btn btn-green hidden" id="btnSync" title="Sincronizar / atualizar trades da conta atual" style="min-width:44px;padding:6px 10px;font-size:16px">🔄</button>
   <button class="btn btn-purple" id="btnCfg">⚙️ Configurar</button>
-  <button class="btn btn-green hidden" id="btnRefresh">🔄 Atualizar</button>
   <button class="btn btn-red hidden" id="btnClear">🗑️ Limpar</button>
   <label class="btn btn-blue" style="cursor:pointer">
     📂 Excel (backup)
@@ -294,7 +295,16 @@ function setStatus(t,c='st-off'){G('connStatus').textContent=t;G('connStatus').c
 function load(t){G('ltx').textContent=t;G('lov').classList.remove('hidden');}
 function unload(){G('lov').classList.add('hidden');}
 function warn(t){G('warn').textContent=t;}
-function updBtns(){const h=S('at')||S('rt');G('btnRefresh').classList.toggle('hidden',!h);G('btnClear').classList.toggle('hidden',!h);}
+function updBtns(){
+  const h=S('at')||S('rt');
+  const sync=G('btnSync');
+  // 🔄 aparece se tem token OU se tem contas salvas
+  if(sync){
+    const hasAcct = loadAccts().length>0;
+    sync.classList.toggle('hidden', !(h || hasAcct));
+  }
+  G('btnClear').classList.toggle('hidden',!h);
+}
 
 // ── STORAGE ──────────────────────────────────────────────────
 function S(k,v){
@@ -447,7 +457,7 @@ async function connect(){
     };
     ws.onmessage=ev=>{try{handleMsg(JSON.parse(ev.data));}catch(e){console.error(e);}};
     ws.onerror=()=>{unload();setStatus('❌ Erro WebSocket','st-err');};
-    ws.onclose=ev=>{clearInterval(hbTmr);if(ev.code!==1000)setStatus(`⚠️ Conexão encerrada (${ev.code}) — clique Atualizar`,'st-err');};
+    ws.onclose=ev=>{clearInterval(hbTmr);if(ev.code!==1000)setStatus(`⚠️ Conexão encerrada (${ev.code}) — toque em 🔄`,'st-err');};
   }catch(e){unload();setStatus('❌ '+e.message,'st-err');}
 }
 
@@ -739,17 +749,19 @@ G('back').onclick=()=>{G('dv').classList.add('hidden');G('mv').classList.remove(
 // filtros agora usam custom dropdown (handlers em refillFilters)
 
 G('btnSync').onclick=()=>{
-  if(acctSelIdx<0){
-    // se não há índice, tenta conectar com a config atual
+  // Sincroniza a conta atual (mesma lógica do antigo Atualizar / Carregar)
+  const accts=loadAccts();
+  if(acctSelIdx>=0 && accts[acctSelIdx]){
+    loadAcctProfile(acctSelIdx);
+  } else if(S('aid') && (S('at')||S('rt'))){
     connect();
-    return;
+  } else {
+    warn('⚠️ Nenhuma conta selecionada. Escolha uma conta no seletor ou configure em ⚙️.');
   }
-  loadAcctProfile(acctSelIdx);
 };
 G('btnCfg').onclick=()=>{openCfg();renderSavedAcctsList();};
 G('btnClose').onclick=()=>G('sp').classList.add('hidden');
 G('btnSave').onclick=async()=>{saveCfg();G('sp').classList.add('hidden');if(!S('cid')||!S('cs')){setStatus('⚠️ Client ID e Secret obrigatórios','st-err');return;}await connect();};
-G('btnRefresh').onclick=()=>connect();
 G('btnClear').onclick=()=>{if(!confirm('Limpar tokens?'))return;['at','rt','exp','aid','cid','cs','srv'].forEach(k=>S(k,null));setStatus('⚪ Limpo','st-off');updBtns();};
 G('xlsUpload').addEventListener('change',e=>{
   if(!e.target.files.length)return;
