@@ -284,10 +284,10 @@ th{color:#d4cc57;background:#111;text-align:left}
 const MONTHS=['JANEIRO','FEVEREIRO','MARÇO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO'];
 const WDAYS=['domingo','segunda','terça','quarta','quinta','sexta','sábado'];
 const WS={live:'wss://live.ctraderapi.com:5036', demo:'wss://demo.ctraderapi.com:5036'};
-const PT={HB:51,AAreq:2100,AAres:2101,ACreq:2102,ACres:2103,SYreq:2114,SYres:2115,DLreq:2133,DLres:2134,ERR:2142};
+const PT={HB:51,AAreq:2100,AAres:2101,ACreq:2102,ACres:2103,SYreq:2114,SYres:2115,DLreq:2133,DLres:2134,CFreq:2143,CFres:2144,ERR:2142};
 
 // ── ESTADO ───────────────────────────────────────────────────
-let allTrades=[],curDate=new Date(),ws=null,hbTmr=null,symMap={},acctId=null,dealsAcc=[];
+let allTrades=[],allCashFlows=[],curDate=new Date(),ws=null,hbTmr=null,symMap={},acctId=null,dealsAcc=[],cashAcc=[],cashCursor=0,cashEnd=0;
 
 // ── HELPERS DOM ──────────────────────────────────────────────
 const G=id=>document.getElementById(id);
@@ -380,8 +380,16 @@ function handleMsg(msg){
   const t=msg.payloadType, p=msg.payload||{};
   if(t===PT.HB){wsSend(PT.HB,{},'hb');return;}
   if(t===PT.ERR){
-    unload();
     const code=p.errorCode||'?',desc=p.description||'';
+    // Se erro no cash flow, ainda processa os deals
+    if(dealsAcc.length){
+      console.warn('Cash flow API error (seguindo só com trades):',code,desc);
+      processDeals(dealsAcc, cashAcc);
+      if(ws){ws.close(1000,'done');ws=null;}
+      clearInterval(hbTmr);
+      return;
+    }
+    unload();
     setStatus(`❌ Erro: ${code}`,'st-err');
     warn(`❌ Erro API cTrader: ${code}\n${desc}\n\n${code==='CANT_ROUTE_REQUEST'?'👉 Solução: abra ⚙️ Configurar e troque o Servidor (Live ↔ Demo) e tente novamente.':''}`);
     console.error('API error:',msg);
@@ -410,14 +418,45 @@ function handleMsg(msg){
       if(p.hasMore&&deals.length){
         const last=deals[deals.length-1];
         const lts=Number(last.executionTimestamp||last.utcLastUpdateTimestamp||0);
-        if(lts){load(`Buscando mais... (${dealsAcc.length} trades)`);wsSend(PT.DLreq,{ctidTraderAccountId:acctId,fromTimestamp:lts+1,toTimestamp:Date.now(),maxRows:5000},'dlx');return;}
+        if(lts){load(`Buscando mais trades... (${dealsAcc.length})`);wsSend(PT.DLreq,{ctidTraderAccountId:acctId,fromTimestamp:lts+1,toTimestamp:Date.now(),maxRows:5000},'dlx');return;}
       }
-      processDeals(dealsAcc);
+      cashAcc=[];
+      cashEnd=Date.now();
+      cashCursor=cashEnd-365*86400000;
+      load('Buscando depósitos/saques (API cash flow)...');
+      requestNextCashChunk();
+      break;
+    }
+    case PT.CFres:{
+      const list=p.depositWithdraw||[];
+      cashAcc=cashAcc.concat(list);
+      const WEEK=604800000;
+      cashCursor+=WEEK;
+      if(cashCursor<cashEnd){
+        const left=Math.ceil((cashEnd-cashCursor)/WEEK);
+        load(`Buscando depósitos/saques... (${cashAcc.length} ops, ~${left} semanas)`);
+        requestNextCashChunk();
+        return;
+      }
+      processDeals(dealsAcc, cashAcc);
       if(ws){ws.close(1000,'done');ws=null;}
       clearInterval(hbTmr);
       break;
     }
   }
+}
+
+function requestNextCashChunk(){
+  const WEEK=604800000;
+  const from=cashCursor;
+  const to=Math.min(cashCursor+WEEK-1, cashEnd);
+  if(from>cashEnd){
+    processDeals(dealsAcc, cashAcc);
+    if(ws){ws.close(1000,'done');ws=null;}
+    clearInterval(hbTmr);
+    return;
+  }
+  wsSend(PT.CFreq,{ctidTraderAccountId:acctId,fromTimestamp:from,toTimestamp:to},'cf'+from);
 }
 
 async function connect(){
@@ -461,7 +500,7 @@ async function connect(){
   }catch(e){unload();setStatus('❌ '+e.message,'st-err');}
 }
 
-// ── NORMALIZAR DEAL ──────────────────────────────────────────
+// ── NORMALIZAR DEAL / CASH ───────────────────────────────────
 // cTrader retorna dinheiro em centavos (inteiro) — sempre divide por 100
 function pm(v){
   if(v==null)return 0;
@@ -469,6 +508,40 @@ function pm(v){
   if(isNaN(n))return 0;
   if(Number.isInteger(n)&&n!==0) return n/100; // centavos → valor real
   return n;
+}
+function moneyDigits(v, digits){
+  if(v==null) return 0;
+  const n=Number(v);
+  if(isNaN(n)) return 0;
+  const d=(digits!=null && digits!=='') ? Number(digits) : 2;
+  if(!isFinite(d) || d<0) return n/100;
+  return n / Math.pow(10, d);
+}
+function normCashFlow(c){
+  if(!c) return null;
+  const ts=Number(c.changeBalanceTimestamp||0);
+  if(!ts) return null;
+  const digits=c.moneyDigits;
+  let delta=moneyDigits(c.delta, digits);
+  const op=c.operationType;
+  const opStr=String(op==null?'':op).toUpperCase();
+  const isWd = op===1 || op==='1' || opStr.includes('WITHDRAW');
+  const isDp = op===0 || op==='0' || opStr.includes('DEPOSIT');
+  if(isWd) delta=-Math.abs(delta);
+  else if(isDp) delta=Math.abs(delta);
+  const dt=new Date(ts);
+  return {
+    id:String(c.balanceHistoryId||ts),
+    time:dt,
+    timestamp:ts,
+    delta,
+    balance:moneyDigits(c.balance, digits),
+    year:dt.getUTCFullYear(),
+    month:dt.getUTCMonth()+1,
+    day:dt.getUTCDate(),
+    note:c.externalNote||'',
+    opType:op
+  };
 }
 
 function normApiDeal(d){
@@ -498,8 +571,7 @@ function normApiDeal(d){
   };
 }
 
-function processDeals(raw){
-  // Deduplica por dealId — evita duplicatas de paginação ou resposta dupla
+function processDeals(raw, rawCash){
   const seen=new Set();
   const trades=raw.map(normApiDeal).filter(t=>{
     if(!t) return false;
@@ -507,11 +579,20 @@ function processDeals(raw){
     seen.add(t.id);
     return true;
   });
+  const seenCf=new Set();
+  const cfs=(rawCash||[]).map(normCashFlow).filter(c=>{
+    if(!c) return false;
+    if(seenCf.has(c.id)) return false;
+    seenCf.add(c.id);
+    return true;
+  });
+  allCashFlows=cfs;
   if(!trades.length){unload();setStatus('⚠️ Nenhum trade encontrado','st-err');warn('⚠️ Nenhum deal fechado encontrado. Verifique Account ID e tipo de conta (Live/Demo).');return;}
   allTrades=trades;unload();
-  setStatus(`✅ ${trades.length} trades carregados — conta ${acctId} (${S('srv')||'live'})`,'st-on');
-  G('stTxt').innerHTML=`<b style="color:#9bd28e">✅ ${trades.length} trades via API</b>`;
-  warn(`📊 ${trades.length} trades carregados automaticamente via API cTrader.`);
+  const cfTxt=cfs.length?` · ${cfs.length} cash flows`:'';
+  setStatus(`✅ ${trades.length} trades${cfTxt} — conta ${acctId} (${S('srv')||'live'})`,'st-on');
+  G('stTxt').innerHTML=`<b style="color:#9bd28e">✅ ${trades.length} trades via API${cfs.length?' · '+cfs.length+' dep/saq':''}</b>`;
+  warn(`📊 ${trades.length} trades`+(cfs.length?` e ${cfs.length} depósitos/saques`:'')+` carregados via API cTrader.`);
   refillFilters();renderMonth();updBtns();
 }
 
@@ -688,28 +769,233 @@ function f2(n){return n.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumF
 function fp(n){return f2(n)+'%';}
 function fdt(d){return(!d||isNaN(d))?'':d.toLocaleString('pt-BR');}
 
+// Limiar para ignorar ruído de ponto flutuante / arredondamento (centavos)
+const CF_EPS=0.01;
+
+/** Cash flows oficiais do mês (API), fallback [] */
+function monthCashFlows(y,m){
+  return (allCashFlows||[]).filter(c=>c.year===y&&c.month===m+1)
+    .sort((a,b)=>a.timestamp-b.timestamp);
+}
+
+/**
+ * Analisa trades do mês + cash flows oficiais (API) quando disponíveis.
+ * TWR liga sub-períodos entre cash flows.
+ * Se não houver cash flow da API, detecta via descontinuidade de balance.
+ */
+function analyzeTrades(trades, y, m){
+  if(!trades.length) return null;
+  const sorted=[...trades].sort((a,b)=>{
+    const dt=a.closingTime-b.closingTime;
+    if(dt!==0) return dt;
+    return String(a.id).localeCompare(String(b.id));
+  });
+
+  const apiCF = (y!=null && m!=null) ? monthCashFlows(y,m) : [];
+  const useApi = apiCF.length>0;
+
+  const events=[];
+  for(const t of sorted){
+    events.push({kind:'trade', time:t.closingTime.getTime(), t});
+  }
+  if(useApi){
+    for(const c of apiCF){
+      events.push({kind:'cf', time:c.timestamp, c});
+    }
+  }
+  events.sort((a,b)=>{
+    if(a.time!==b.time) return a.time-b.time;
+    if(a.kind!==b.kind) return a.kind==='cf'?-1:1;
+    return 0;
+  });
+
+  const si=sorted[0].balance-sorted[0].net;
+  let deposits=0, withdrawals=0;
+  let product=1;
+  let periodStart=si;
+  let equity=si;
+  let lastBal=si;
+  const dayMap=new Map();
+
+  if(!useApi){
+    let prevBal=null;
+    for(const t of sorted){
+      const balBefore=t.balance-t.net;
+      let cf=0;
+      if(prevBal!==null){
+        const raw=balBefore-prevBal;
+        if(Math.abs(raw)>CF_EPS){
+          if(Math.abs(periodStart)>CF_EPS) product*=(prevBal/periodStart);
+          periodStart=balBefore;
+          cf=raw;
+          if(cf>0) deposits+=cf; else withdrawals+=cf;
+        }
+      }
+      const k=`${t.closingYear}-${String(t.closingMonth).padStart(2,'0')}-${String(t.closingDay).padStart(2,'0')}`;
+      if(!dayMap.has(k)) dayMap.set(k,{net:0,tr:[],cf:0,s0:balBefore,sf:t.balance});
+      const d=dayMap.get(k);
+      d.net+=t.net; d.tr.push(t); d.cf+=cf; d.sf=t.balance;
+      prevBal=t.balance;
+      lastBal=t.balance;
+    }
+    if(prevBal!==null && Math.abs(periodStart)>CF_EPS) product*=(prevBal/periodStart);
+  } else {
+    let started=false;
+    for(const ev of events){
+      if(ev.kind==='cf'){
+        const c=ev.c;
+        if(started && Math.abs(periodStart)>CF_EPS){
+          product*=(equity/periodStart);
+        }
+        equity+=c.delta;
+        periodStart=equity;
+        started=true;
+        if(c.delta>CF_EPS) deposits+=c.delta;
+        else if(c.delta<-CF_EPS) withdrawals+=c.delta;
+        lastBal=c.balance!=null?c.balance:equity;
+        const k=`${c.year}-${String(c.month).padStart(2,'0')}-${String(c.day).padStart(2,'0')}`;
+        if(!dayMap.has(k)) dayMap.set(k,{net:0,tr:[],cf:0,s0:equity-c.delta,sf:lastBal});
+        dayMap.get(k).cf+=c.delta;
+        dayMap.get(k).sf=lastBal;
+      } else {
+        const t=ev.t;
+        const balBefore=t.balance-t.net;
+        if(!started){
+          periodStart=balBefore;
+          equity=balBefore;
+          started=true;
+        }
+        equity+=t.net;
+        lastBal=t.balance;
+        const k=`${t.closingYear}-${String(t.closingMonth).padStart(2,'0')}-${String(t.closingDay).padStart(2,'0')}`;
+        if(!dayMap.has(k)) dayMap.set(k,{net:0,tr:[],cf:0,s0:balBefore,sf:t.balance});
+        const d=dayMap.get(k);
+        if(!d.tr.length) d.s0=balBefore;
+        d.net+=t.net; d.tr.push(t); d.sf=t.balance;
+      }
+    }
+    if(started && Math.abs(periodStart)>CF_EPS) product*=(equity/periodStart);
+  }
+
+  const sf=lastBal;
+  const net=sorted.reduce((s,t)=>s+t.net,0);
+  const twr=(product-1)*100;
+  const totalCF=deposits+withdrawals;
+
+  let runProduct=1, runPeriodStart=si, runEquity=si, runStarted=false;
+  const dm=new Map();
+  const dayKeys=[...dayMap.keys()].sort();
+
+  if(!useApi){
+    let prevBal=null;
+    runPeriodStart=si;
+    for(const k of dayKeys){
+      const dayTrades=dayMap.get(k).tr;
+      for(const t of dayTrades){
+        const balBefore=t.balance-t.net;
+        if(prevBal!==null){
+          const raw=balBefore-prevBal;
+          if(Math.abs(raw)>CF_EPS){
+            if(Math.abs(runPeriodStart)>CF_EPS) runProduct*=(prevBal/runPeriodStart);
+            runPeriodStart=balBefore;
+          }
+        }
+        prevBal=t.balance;
+      }
+      let dayProduct=runProduct;
+      if(prevBal!==null && Math.abs(runPeriodStart)>CF_EPS) dayProduct=runProduct*(prevBal/runPeriodStart);
+      const d=dayMap.get(k);
+      const pctD=d.s0&&Math.abs(d.s0)>CF_EPS?(d.net/d.s0)*100:0;
+      dm.set(k,{
+        net:d.net,sf:d.sf,s0:d.s0,cf:d.cf,pctD,pctA:(dayProduct-1)*100,
+        wins:d.tr.filter(t=>t.net>0).length,
+        losses:d.tr.filter(t=>t.net<=0).length,
+        count:d.tr.length,trades:d.tr
+      });
+    }
+  } else {
+    const byDay=new Map();
+    for(const ev of events){
+      const dt=new Date(ev.time);
+      const k=`${dt.getUTCFullYear()}-${String(dt.getUTCMonth()+1).padStart(2,'0')}-${String(dt.getUTCDate()).padStart(2,'0')}`;
+      if(!byDay.has(k)) byDay.set(k,[]);
+      byDay.get(k).push(ev);
+    }
+    for(const k of [...byDay.keys()].sort()){
+      for(const ev of byDay.get(k)){
+        if(ev.kind==='cf'){
+          if(runStarted && Math.abs(runPeriodStart)>CF_EPS) runProduct*=(runEquity/runPeriodStart);
+          runEquity+=ev.c.delta;
+          runPeriodStart=runEquity;
+          runStarted=true;
+        } else {
+          const t=ev.t;
+          const balBefore=t.balance-t.net;
+          if(!runStarted){runPeriodStart=balBefore;runEquity=balBefore;runStarted=true;}
+          runEquity+=t.net;
+        }
+      }
+      let dayProduct=runProduct;
+      if(runStarted && Math.abs(runPeriodStart)>CF_EPS) dayProduct=runProduct*(runEquity/runPeriodStart);
+      const d=dayMap.get(k)||{net:0,tr:[],cf:0,s0:0,sf:0};
+      const pctD=d.s0&&Math.abs(d.s0)>CF_EPS?(d.net/d.s0)*100:0;
+      dm.set(k,{
+        net:d.net,sf:d.sf,s0:d.s0,cf:d.cf||0,pctD,pctA:(dayProduct-1)*100,
+        wins:(d.tr||[]).filter(t=>t.net>0).length,
+        losses:(d.tr||[]).filter(t=>t.net<=0).length,
+        count:(d.tr||[]).length,trades:d.tr||[]
+      });
+    }
+  }
+
+  return {si,sf,net,twr,deposits,withdrawals,totalCF,dm,useApi};
+}
+
 function renderMonth(){
   const y=curDate.getFullYear(),m=curDate.getMonth();
   G('yTxt').textContent=y; G('mTxt').textContent=' '+MONTHS[m];
   const mt=mTrades(y,m);
-  if(mt.length){
-    const net=mt.reduce((s,t)=>s+t.net,0),si=mt[0].balance-mt[0].net,sf=si+net,pct=si?net/si*100:0;
-    const c=net>=0?'pos':'neg';
-    G('sumBox').innerHTML=`<div><b>SALDO INICIAL:</b> ${f2(si)}</div><div><b>RESULTADO:</b> <span class="value ${c}">${f2(net)} | ${fp(pct)}</span></div><div><b>SALDO FINAL:</b> ${f2(sf)}</div><div style="font-size:12px;color:#aaa;margin-top:4px">⚠️ Depósitos/saques não afetam estes valores</div>`;
+  const hasFilter=!!(fSymVal||fChnVal||fLblVal);
+  const monthCF=monthCashFlows(y,m);
+  const analyzed=mt.length ? analyzeTrades(mt,y,m) : null;
+
+  if(analyzed){
+    const a=analyzed;
+    const c=a.net>=0?'pos':'neg';
+    const twrC=a.twr>=0?'pos':'neg';
+    let cfLine='';
+    if(Math.abs(a.deposits)>CF_EPS || Math.abs(a.withdrawals)>CF_EPS){
+      const parts=[];
+      if(a.deposits>CF_EPS) parts.push('+'+f2(a.deposits)+' dep.');
+      if(a.withdrawals<-CF_EPS) parts.push(f2(a.withdrawals)+' saq.');
+      const src=a.useApi?'API':'detectado';
+      cfLine='<div style="font-size:12px;color:#f3d279;margin-top:2px">💸 Cash flow ('+src+'): '+parts.join(' · ')+'</div>';
+    }
+    const note=hasFilter
+      ? '<div style="font-size:11px;color:#aaa;margin-top:4px">⚠️ Filtro ativo — TWR nos trades filtrados; cash flow da conta</div>'
+      : '<div style="font-size:11px;color:#aaa;margin-top:4px">📐 % = TWR'+(a.useApi?' · dep/saq via API oficial':'')+'</div>';
+    G('sumBox').innerHTML=
+      '<div><b>SALDO INICIAL:</b> '+f2(a.si)+'</div>'+
+      '<div><b>RESULTADO:</b> <span class="value '+c+'">'+f2(a.net)+'</span> | <span class="value '+twrC+'">'+fp(a.twr)+'</span> <span style="font-size:11px;color:#aaa">TWR</span></div>'+
+      '<div><b>SALDO FINAL:</b> '+f2(a.sf)+'</div>'+
+      cfLine+note;
+  } else if(monthCF.length){
+    let dep=0,wd=0;
+    monthCF.forEach(c=>{if(c.delta>0)dep+=c.delta;else wd+=c.delta;});
+    const last=monthCF[monthCF.length-1];
+    G('sumBox').innerHTML=
+      '<div class="muted"><b>SEM TRADES</b> neste mês</div>'+
+      '<div style="font-size:12px;color:#f3d279;margin-top:4px">💸 Cash flow (API): '+(dep>0?'+'+f2(dep)+' dep.':'')+(wd<0?' '+f2(wd)+' saq.':'')+'</div>'+
+      (last?'<div style="font-size:12px;margin-top:2px"><b>Último saldo (cash):</b> '+f2(last.balance)+'</div>':'');
   } else {
-    G('sumBox').innerHTML=`<div class="muted"><b>SEM DADOS</b> para o mês/filtros selecionados.</div>`;
+    G('sumBox').innerHTML='<div class="muted"><b>SEM DADOS</b> para o mês/filtros selecionados.</div>';
   }
+
   const cal=G('cal'); cal.innerHTML='';
   WDAYS.forEach(d=>{const e=document.createElement('div');e.className='weekday';e.textContent=d;cal.appendChild(e);});
-  // Daily metrics
-  const dm=new Map();
-  if(mt.length){
-    const si=mt[0].balance-mt[0].net;
-    const tmp=new Map();
-    mt.forEach(t=>{const k=`${t.closingYear}-${String(t.closingMonth).padStart(2,'0')}-${String(t.closingDay).padStart(2,'0')}`;if(!tmp.has(k))tmp.set(k,{net:0,tr:[]});tmp.get(k).net+=t.net;tmp.get(k).tr.push(t);});
-    let acc=0;
-    for(const k of [...tmp.keys()].sort()){const d=tmp.get(k);const s0=si+acc,sf=s0+d.net;dm.set(k,{net:d.net,sf,pctD:s0?d.net/s0*100:0,pctA:si?(sf-si)/si*100:0,wins:d.tr.filter(t=>t.net>0).length,losses:d.tr.filter(t=>t.net<=0).length,count:d.tr.length,trades:d.tr});acc+=d.net;}
-  }
+
+  const dm=analyzed ? analyzed.dm : new Map();
+
   const fd=new Date(y,m,1),sw=fd.getDay(),dim=new Date(y,m+1,0).getDate();
   for(let i=0;i<sw;i++){const e=document.createElement('div');e.className='cell empty';cal.appendChild(e);}
   for(let day=1;day<=dim;day++){
@@ -720,7 +1006,11 @@ function renderMonth(){
     if(di){
       const box=document.createElement('div');
       box.className=`day-box ${di.net>=0?'pos':'neg'}`;
-      box.innerHTML=`<div>${f2(di.net)} | ${f2(di.sf)}</div><div>${fp(di.pctD)} | ${fp(di.pctA)}</div><div>${di.wins}G ${di.losses}L | ${di.count} trades</div>`;
+      let cfHint='';
+      if(Math.abs(di.cf)>CF_EPS){
+        cfHint=`<div style="font-size:10px;opacity:.85">${di.cf>0?'+':''}${f2(di.cf)} 💸</div>`;
+      }
+      box.innerHTML=`<div>${f2(di.net)} | ${f2(di.sf)}</div><div>${fp(di.pctD)} | ${fp(di.pctA)}</div><div>${di.wins}G ${di.losses}L | ${di.count} trades</div>${cfHint}`;
       cell.appendChild(box);
       cell.addEventListener('click',(function(ki,dii){return()=>openDay(ki,dii);})(k,di));
     }
@@ -732,7 +1022,11 @@ function openDay(k,di){
   const[y,m,d]=k.split('-');
   G('dTitle').textContent=`Detalhe — ${d}/${m}/${y}`;
   G('dSum').className=`detail-card ${di.net>=0?'pos':'neg'}`;
-  G('dSum').innerHTML=`<div>${f2(di.net)} | ${f2(di.sf)}</div><div>${fp(di.pctD)} | ${fp(di.pctA)}</div><div>${di.wins}G ${di.losses}L | ${di.count} trades</div>`;
+  let cfLine='';
+  if(Math.abs(di.cf)>CF_EPS){
+    cfLine=`<div style="font-size:13px;margin-top:4px">💸 Cash flow neste dia: <b>${di.cf>0?'+':''}${f2(di.cf)}</b></div>`;
+  }
+  G('dSum').innerHTML=`<div>${f2(di.net)} | ${f2(di.sf)}</div><div>${fp(di.pctD)} | ${fp(di.pctA)}</div><div>${di.wins}G ${di.losses}L | ${di.count} trades</div>${cfLine}`;
   G('dBody').innerHTML=di.trades.map(t=>`<tr class="${t.net>=0?'tr-pos':'tr-neg'}"><td>${t.id}</td><td>${t.channel}</td><td>${t.label}</td><td>${t.orderId}</td><td>${t.symbol}</td><td>${t.openingSide}</td><td>${t.closingSide}</td><td>${fdt(t.openingTime)}</td><td>${fdt(t.closingTime)}</td><td class="num">${f2(t.requestedVolume)}</td><td class="num">${f2(t.closingQuantity)}</td><td class="num">${f2(t.entryPrice)}</td><td class="num">${f2(t.closingVolume)}</td><td class="num">${f2(t.closingPrice)}</td><td class="num ${t.swap>=0?'cpos':'cneg'}">${f2(t.swap)}</td><td class="num ${t.commission>=0?'cpos':'cneg'}">${f2(t.commission)}</td><td class="num ${t.pips>=0?'cpos':'cneg'}">${f2(t.pips)}</td><td class="num ${t.gross>=0?'cpos':'cneg'}">${f2(t.gross)}</td><td class="num ${t.net>=0?'cpos':'cneg'}">${f2(t.net)}</td><td class="num">${f2(t.balance)}</td></tr>`).join('');
   G('mv').classList.add('hidden'); G('dv').classList.remove('hidden');
 }
@@ -768,7 +1062,7 @@ G('xlsUpload').addEventListener('change',e=>{
     const ws2=wb.Sheets[wb.SheetNames[0]];
     const trades=XLSX.utils.sheet_to_json(ws2).map(normXls).filter(Boolean);
     if(!trades.length){warn('⚠️ Nenhum trade válido no Excel.');return;}
-    allTrades=trades;G('stTxt').innerHTML=`<b style="color:#9bd28e">✅ ${trades.length} trades (Excel)</b>`;warn(`📊 ${trades.length} trades carregados via Excel.`);refillFilters();renderMonth();updBtns();
+    allTrades=trades;allCashFlows=[];G('stTxt').innerHTML=`<b style="color:#9bd28e">✅ ${trades.length} trades (Excel)</b>`;warn(`📊 ${trades.length} trades carregados via Excel (sem cash flow API).`);refillFilters();renderMonth();updBtns();
   };
   fr.readAsArrayBuffer(e.target.files[0]);e.target.value='';
 });
