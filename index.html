@@ -59,7 +59,21 @@ th{color:#d4cc57;background:#111;text-align:left}
 .lsp{width:44px;height:44px;border:3px solid #333;border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
 .ltx{color:#f3d279;font-size:15px;text-align:center;max-width:320px;line-height:1.4}
 @keyframes spin{to{transform:rotate(360deg)}}
-@media(max-width:768px){.month-title{font-size:18px}.cell{min-height:90px;padding-top:22px}.day-box{font-size:10px}.weekday{font-size:12px}}
+@media(max-width:768px){
+.month-title{font-size:18px}
+.cell{min-height:90px;padding-top:22px}
+.day-box{font-size:10px}
+.weekday{font-size:12px}
+/* === FIX MOBILE (cTrader Android WebView) === */
+.sr{flex-direction:column;align-items:stretch}
+.sr label{min-width:auto;margin-bottom:2px}
+.sr input,.sr select{min-width:0!important;width:100%;font-size:16px;-webkit-appearance:auto;appearance:auto}
+.sp{max-height:85vh;overflow-y:auto;-webkit-overflow-scrolling:touch}
+}
+/* Botões Live/Demo - visual em todas as telas */
+.srv-btn{opacity:0.55;border-color:#555;transition:all .15s}
+.srv-btn.active{opacity:1;border-color:#4a8c4a;background:#1a3a1a;font-weight:700}
+.srv-btn#btnSrvDemo.active{border-color:#4a7c9c;background:#1e3a5f}
 </style>
 </head>
 <body>
@@ -118,10 +132,11 @@ th{color:#d4cc57;background:#111;text-align:left}
   <div class="sn" style="color:#f3d279;font-weight:700">🖥️ Tipo de conta:</div>
 
   <div class="sr"><label>Servidor:</label>
-    <select id="cSrv">
-      <option value="live">🟢 Live — wss://live.ctraderapi.com:5036</option>
-      <option value="demo">🔵 Demo — wss://demo.ctraderapi.com:5036</option>
-    </select>
+    <div id="cSrvBtns" style="display:flex;gap:8px;flex:1;flex-wrap:wrap">
+      <button type="button" class="btn srv-btn" id="btnSrvLive" data-srv="live" style="flex:1;min-width:120px;min-height:44px;font-size:15px">🟢 Live</button>
+      <button type="button" class="btn srv-btn" id="btnSrvDemo" data-srv="demo" style="flex:1;min-width:120px;min-height:44px;font-size:15px">🔵 Demo</button>
+    </div>
+    <input type="hidden" id="cSrv" value="live"/>
   </div>
 
   <div class="highlight">
@@ -135,6 +150,19 @@ th{color:#d4cc57;background:#111;text-align:left}
     <button class="btn btn-purple" id="btnSaveAcct">⭐ Salvar como conta</button>
     <button class="btn" id="btnClose">✖ Fechar</button>
   </div>
+
+  <!-- Input para nome da conta (substitui prompt no mobile) -->
+  <div id="acctNameInput" style="display:none;margin-top:8px">
+    <div class="sr">
+      <label>Nome da conta:</label>
+      <input id="cAcctName" type="text" placeholder="Ex: Live Principal, Demo, 210 LIVE..." style="font-size:16px"/>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn btn-green" id="btnConfirmSaveAcct" style="flex:1">✓ Confirmar e Salvar</button>
+      <button class="btn" id="btnCancelSaveAcct">Cancelar</button>
+    </div>
+  </div>
+
   <div id="savedAcctsBox" style="display:none">
     <hr class="sdiv"/>
     <div class="sn" style="color:#9bd28e;font-weight:700">⭐ Contas salvas:</div>
@@ -218,8 +246,17 @@ function tokenOk(){return S('at')&&parseInt(S('exp')||0)>Date.now()+60000;}
 // ── SETTINGS ─────────────────────────────────────────────────
 function openCfg(){
   G('cId').value=S('cid'); G('cSec').value=S('cs'); G('cAt').value=''; G('cRt').value='';
-  G('cAid').value=S('aid'); G('cSrv').value=S('srv')||'live';
+  G('cAid').value=S('aid');
+  const srv = S('srv')||'live';
+  G('cSrv').value = srv;
+  setSrvBtn(srv);
+  G('acctNameInput').style.display='none';
   G('sp').classList.remove('hidden');
+}
+function setSrvBtn(srv){
+  G('btnSrvLive').classList.toggle('active', srv==='live');
+  G('btnSrvDemo').classList.toggle('active', srv==='demo');
+  G('cSrv').value = srv;
 }
 function saveCfg(){
   const cid=G('cId').value.trim(), cs=G('cSec').value.trim();
@@ -437,6 +474,7 @@ function loadAcctProfile(i){
   const a=loadAccts()[i];if(!a)return;
   S('aid',a.aid);S('srv',a.srv);
   G('cAid').value=a.aid;G('cSrv').value=a.srv;
+  if(typeof setSrvBtn==='function') setSrvBtn(a.srv);
   G('sp').classList.add('hidden');
   acctId=parseInt(a.aid);
   connect();
@@ -448,17 +486,48 @@ function delAcct(i){
 }
 window.loadAcctProfile=loadAcctProfile;window.delAcct=delAcct;
 
+// === FIX: Salvar conta sem prompt (funciona no WebView do cTrader Android) ===
 G('btnSaveAcct').onclick=()=>{
   const aid=G('cAid').value.trim(),srv=G('cSrv').value;
-  if(!aid){alert('Preencha o Account ID antes de salvar.');return;}
-  const name=prompt('Nome para esta conta (ex: Demo Principal, Live Real):');
-  if(!name)return;
+  if(!aid){
+    // Usa um aviso visual em vez de alert se possível
+    const msg='Preencha o Account ID antes de salvar.';
+    try{alert(msg);}catch(e){warn(msg);}
+    return;
+  }
+  // Mostra o campo de nome em vez de prompt
+  G('cAcctName').value = (srv==='live'?'LIVE':'DEMO') + ' ' + aid;
+  G('acctNameInput').style.display='block';
+  G('cAcctName').focus();
+};
+
+G('btnConfirmSaveAcct').onclick=()=>{
+  const aid=G('cAid').value.trim(),srv=G('cSrv').value;
+  let name=G('cAcctName').value.trim();
+  if(!name) name = (srv==='live'?'LIVE':'DEMO') + ' ' + aid;
   const accts=loadAccts();
+  // Evita duplicata exata
+  if(accts.some(a=>a.aid===aid && a.srv===srv)){
+    try{alert('Esta conta já está salva.');}catch(e){warn('Esta conta já está salva.');}
+    G('acctNameInput').style.display='none';
+    return;
+  }
   accts.push({name,aid,srv});
   saveAccts(accts);
   renderAcctDropdown();renderSavedAcctsList();
-  alert(`Conta "${name}" salva! Aparece no seletor da barra superior.`);
+  G('acctNameInput').style.display='none';
+  try{alert(`Conta "${name}" salva!`);}catch(e){warn(`✅ Conta "${name}" salva!`);}
 };
+
+G('btnCancelSaveAcct').onclick=()=>{
+  G('acctNameInput').style.display='none';
+};
+
+// === FIX: Botões Live/Demo (mais confiável no WebView do cTrader Android) ===
+G('btnSrvLive').onclick=()=>setSrvBtn('live');
+G('btnSrvDemo').onclick=()=>setSrvBtn('demo');
+
+
 function pn(s){if(s==null)return 0;if(typeof s==='number')return s;return parseFloat(String(s).trim().replace(/\./g,'').replace(',','.'))||0;}
 function fc(row,names){const keys=Object.keys(row);for(const n of names){const nm=n.toLowerCase().replace(/[^a-z0-9]/g,'');const k=keys.find(k=>k.toLowerCase().replace(/[^a-z0-9]/g,'')===nm);if(k!==undefined)return row[k];}}
 function pdt(v){if(!v)return null;const m=String(v).trim().match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2}):(\d{2})\.(\d+)/);if(!m)return null;const[,d,mo,y,h,mi,s,ms]=m.map(Number);let uh=h-2,ud=d,um=mo,uy=y;if(uh<0){uh+=24;const p=new Date(Date.UTC(y,mo-1,d-1));ud=p.getUTCDate();um=p.getUTCMonth()+1;uy=p.getUTCFullYear();}return{oy:y,om:mo,od:d,dt:new Date(Date.UTC(uy,um-1,ud,uh,mi,s,ms))};}
