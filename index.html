@@ -19,8 +19,19 @@
 .month-title{display:flex;gap:16px;font-size:22px;font-weight:700;color:var(--accent);justify-content:center;flex:1}
 .summary{text-align:center;font-size:14px;line-height:1.5;margin-bottom:8px}
 .value.pos{color:#9bd28e}.value.neg{color:#ff6b6b}
-.calendar{display:grid;grid-template-columns:repeat(7,1fr);border-top:1px solid var(--line);border-left:1px solid var(--line)}
-.weekday,.cell{border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.calendar{
+  display:grid;
+  grid-template-columns:repeat(7,1fr);
+  border:1px solid var(--line);
+  overflow:hidden;
+}
+.weekday,.cell{
+  border-right:1px solid var(--line);
+  border-bottom:1px solid var(--line);
+}
+/* remove borda interna duplicada na última coluna (sábado) e última linha */
+.weekday:nth-child(7n),.cell:nth-child(7n){border-right:none}
+
 .weekday{color:#d4cc57;text-align:center;padding:6px 4px;font-size:14px}
 .cell{min-height:112px;position:relative;padding:28px 8px 8px;cursor:pointer}
 .cell.empty{cursor:default}
@@ -130,7 +141,7 @@ th{color:#d4cc57;background:#111;text-align:left}
     <button type="button" class="cdrop-btn" id="acctDropBtn"><span class="cdrop-label" id="acctDropLabel">Conta...</span> ▾</button>
     <div class="cdrop-menu" id="acctDropMenu"></div>
   </div>
-  <button class="btn btn-green hidden" id="btnLoad">▶ Carregar</button>
+  <button class="btn btn-green hidden" id="btnSync" title="Sincronizar / atualizar trades da conta atual" style="min-width:44px;padding:6px 10px;font-size:16px">🔄</button>
   <button class="btn btn-purple" id="btnCfg">⚙️ Configurar</button>
   <button class="btn btn-green hidden" id="btnRefresh">🔄 Atualizar</button>
   <button class="btn btn-red hidden" id="btnClear">🗑️ Limpar</button>
@@ -511,8 +522,14 @@ function closeAllCDrops(except){
 function renderAcctDropdown(){
   const accts=loadAccts();
   const drop=G('acctDrop');
-  if(!accts.length){drop.style.display='none';G('btnLoad').classList.add('hidden');return;}
-  drop.style.display='';G('btnLoad').classList.remove('hidden');
+  const sync=G('btnSync');
+  if(!accts.length){
+    drop.style.display='none';
+    if(sync) sync.classList.add('hidden');
+    return;
+  }
+  drop.style.display='';
+  if(sync) sync.classList.remove('hidden');
   if(acctSelIdx<0 || acctSelIdx>=accts.length) acctSelIdx=0;
   const a=accts[acctSelIdx];
   G('acctDropLabel').textContent = a ? `${a.name} (${a.srv.toUpperCase()})` : 'Conta...';
@@ -522,12 +539,15 @@ function renderAcctDropdown(){
   `).join('');
   menu.querySelectorAll('.cdrop-item').forEach(el=>{
     el.onclick=()=>{
-      acctSelIdx=parseInt(el.dataset.idx);
+      const idx=parseInt(el.dataset.idx);
+      const same = (idx===acctSelIdx);
+      acctSelIdx=idx;
       const aa=loadAccts()[acctSelIdx];
       G('acctDropLabel').textContent = `${aa.name} (${aa.srv.toUpperCase()})`;
       closeAllCDrops();
-      // highlight
       menu.querySelectorAll('.cdrop-item').forEach(x=>x.classList.toggle('selected',x.dataset.idx==acctSelIdx));
+      // Sempre carrega ao selecionar (mesmo se for a mesma conta = sincroniza)
+      loadAcctProfile(acctSelIdx);
     };
   });
 }
@@ -718,8 +738,12 @@ G('fClr').onclick=()=>{fSymVal='';fChnVal='';fLblVal='';refillFilters();renderMo
 G('back').onclick=()=>{G('dv').classList.add('hidden');G('mv').classList.remove('hidden');};
 // filtros agora usam custom dropdown (handlers em refillFilters)
 
-G('btnLoad').onclick=()=>{
-  if(acctSelIdx<0)return;
+G('btnSync').onclick=()=>{
+  if(acctSelIdx<0){
+    // se não há índice, tenta conectar com a config atual
+    connect();
+    return;
+  }
   loadAcctProfile(acctSelIdx);
 };
 G('btnCfg').onclick=()=>{openCfg();renderSavedAcctsList();};
