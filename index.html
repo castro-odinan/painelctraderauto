@@ -74,6 +74,44 @@ th{color:#d4cc57;background:#111;text-align:left}
 .srv-btn{opacity:0.55;border-color:#555;transition:all .15s}
 .srv-btn.active{opacity:1;border-color:#4a8c4a;background:#1a3a1a;font-weight:700}
 .srv-btn#btnSrvDemo.active{border-color:#4a7c9c;background:#1e3a5f}
+
+/* === Custom dropdowns (WebView-safe, no native <select>) === */
+.cdrop{position:relative;display:inline-block}
+.cdrop-btn{
+  background:#111;color:#fff;border:1px solid #555;border-radius:6px;
+  min-height:36px;padding:6px 10px;font-size:14px;cursor:pointer;
+  display:flex;align-items:center;gap:6px;white-space:nowrap;max-width:100%
+}
+.cdrop-btn .cdrop-label{overflow:hidden;text-overflow:ellipsis}
+.cdrop-menu{
+  display:none;position:absolute;z-index:200;top:100%;left:0;margin-top:4px;
+  background:#111;border:1px solid #555;border-radius:6px;min-width:160px;max-width:90vw;
+  max-height:240px;overflow-y:auto;-webkit-overflow-scrolling:touch;box-shadow:0 8px 24px rgba(0,0,0,.6)
+}
+.cdrop-menu.open{display:block}
+.cdrop-item{
+  padding:10px 12px;font-size:14px;cursor:pointer;border-bottom:1px solid #2a2a2a;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis
+}
+.cdrop-item:last-child{border-bottom:none}
+.cdrop-item:hover,.cdrop-item:active{background:#1a3a1a}
+.cdrop-item.selected{background:#1a3a1a;color:#9bd28e;font-weight:700}
+.cdrop-item.empty{color:#888;pointer-events:none}
+#acctDrop{min-width:140px}
+#acctDrop .cdrop-btn{max-width:200px}
+.filters .cdrop{max-width:140px}
+.filters .cdrop-btn{font-size:13px;padding:6px 8px}
+@media(max-width:768px){
+  .cdrop-btn{min-height:44px;font-size:15px}
+  .cdrop-item{padding:12px 14px;font-size:15px}
+  .filters{flex-direction:column;align-items:stretch}
+  .filters .cdrop{max-width:none;width:100%}
+  .filters .cdrop-btn{width:100%;justify-content:space-between}
+  .filters .cdrop-menu{width:100%;left:0;right:0}
+  #acctDrop{width:100%;max-width:none}
+  #acctDrop .cdrop-btn{max-width:none;width:100%}
+}
+
 </style>
 </head>
 <body>
@@ -88,7 +126,10 @@ th{color:#d4cc57;background:#111;text-align:left}
 <!-- API BAR -->
 <div class="api-bar">
   <span id="connStatus" class="st-off">⚪ Configure a API para começar</span>
-  <select id="acctSel" style="display:none;max-width:220px" title="Selecionar conta salva"></select>
+  <div class="cdrop" id="acctDrop" style="display:none">
+    <button type="button" class="cdrop-btn" id="acctDropBtn"><span class="cdrop-label" id="acctDropLabel">Conta...</span> ▾</button>
+    <div class="cdrop-menu" id="acctDropMenu"></div>
+  </div>
   <button class="btn btn-green hidden" id="btnLoad">▶ Carregar</button>
   <button class="btn btn-purple" id="btnCfg">⚙️ Configurar</button>
   <button class="btn btn-green hidden" id="btnRefresh">🔄 Atualizar</button>
@@ -182,9 +223,18 @@ th{color:#d4cc57;background:#111;text-align:left}
       <button class="btn" id="next">▶</button>
     </div>
     <div class="filters" style="flex:1;justify-content:flex-end">
-      <select id="fSym"><option value="">Símbolo: todos</option></select>
-      <select id="fChn"><option value="">Canal: todos</option></select>
-      <select id="fLbl"><option value="">Label: todos</option></select>
+      <div class="cdrop" id="fSymDrop">
+        <button type="button" class="cdrop-btn" id="fSymBtn"><span class="cdrop-label" id="fSymLabel">Símbolo: todos</span> ▾</button>
+        <div class="cdrop-menu" id="fSymMenu"></div>
+      </div>
+      <div class="cdrop" id="fChnDrop">
+        <button type="button" class="cdrop-btn" id="fChnBtn"><span class="cdrop-label" id="fChnLabel">Canal: todos</span> ▾</button>
+        <div class="cdrop-menu" id="fChnMenu"></div>
+      </div>
+      <div class="cdrop" id="fLblDrop">
+        <button type="button" class="cdrop-btn" id="fLblBtn"><span class="cdrop-label" id="fLblLabel">Label: todos</span> ▾</button>
+        <div class="cdrop-menu" id="fLblMenu"></div>
+      </div>
       <button class="btn" id="fClr">Limpar filtro</button>
     </div>
     <div class="muted" id="stTxt">Aguardando dados</div>
@@ -448,12 +498,38 @@ function processDeals(raw){
 function loadAccts(){try{return JSON.parse(localStorage.getItem('ct_accts')||'[]');}catch{return[];}}
 function saveAccts(a){localStorage.setItem('ct_accts',JSON.stringify(a));}
 
+// Estado dos filtros customizados
+let fSymVal='', fChnVal='', fLblVal='';
+let acctSelIdx = -1;
+
+function closeAllCDrops(except){
+  document.querySelectorAll('.cdrop-menu.open').forEach(m=>{
+    if(m!==except) m.classList.remove('open');
+  });
+}
+
 function renderAcctDropdown(){
   const accts=loadAccts();
-  const sel=G('acctSel');
-  if(!accts.length){sel.style.display='none';G('btnLoad').classList.add('hidden');return;}
-  sel.style.display='';G('btnLoad').classList.remove('hidden');
-  sel.innerHTML=accts.map((a,i)=>`<option value="${i}">${a.name} (${a.srv.toUpperCase()})</option>`).join('');
+  const drop=G('acctDrop');
+  if(!accts.length){drop.style.display='none';G('btnLoad').classList.add('hidden');return;}
+  drop.style.display='';G('btnLoad').classList.remove('hidden');
+  if(acctSelIdx<0 || acctSelIdx>=accts.length) acctSelIdx=0;
+  const a=accts[acctSelIdx];
+  G('acctDropLabel').textContent = a ? `${a.name} (${a.srv.toUpperCase()})` : 'Conta...';
+  const menu=G('acctDropMenu');
+  menu.innerHTML = accts.map((a,i)=>`
+    <div class="cdrop-item${i===acctSelIdx?' selected':''}" data-idx="${i}">${a.name} (${a.srv.toUpperCase()})</div>
+  `).join('');
+  menu.querySelectorAll('.cdrop-item').forEach(el=>{
+    el.onclick=()=>{
+      acctSelIdx=parseInt(el.dataset.idx);
+      const aa=loadAccts()[acctSelIdx];
+      G('acctDropLabel').textContent = `${aa.name} (${aa.srv.toUpperCase()})`;
+      closeAllCDrops();
+      // highlight
+      menu.querySelectorAll('.cdrop-item').forEach(x=>x.classList.toggle('selected',x.dataset.idx==acctSelIdx));
+    };
+  });
 }
 
 function renderSavedAcctsList(){
@@ -539,19 +615,45 @@ function normXls(row){
 
 // ── FILTROS ───────────────────────────────────────────────────
 function uniq(arr,k){return[...new Set(arr.map(x=>x[k]).filter(Boolean))].sort((a,b)=>String(a).localeCompare(String(b)));}
-function refillSel(sel,lbl,vals){const c=sel.value;sel.innerHTML=`<option value="">${lbl}: todos</option>`;vals.forEach(v=>{const o=document.createElement('option');o.value=o.textContent=v;sel.appendChild(o);});if(vals.includes(c))sel.value=c;else sel.value='';}
+function buildFilterMenu(menuId, labelId, vals, currentVal, lblPrefix, onPick){
+  const menu=G(menuId), lab=G(labelId);
+  const allLabel = lblPrefix+': todos';
+  lab.textContent = currentVal ? (lblPrefix+': '+currentVal) : allLabel;
+  let html = `<div class="cdrop-item${!currentVal?' selected':''}" data-val="">${allLabel}</div>`;
+  if(!vals.length){
+    html += `<div class="cdrop-item empty">— sem opções neste mês —</div>`;
+  } else {
+    vals.forEach(v=>{
+      html += `<div class="cdrop-item${v===currentVal?' selected':''}" data-val="${String(v).replace(/"/g,'&quot;')}">${v}</div>`;
+    });
+  }
+  menu.innerHTML = html;
+  menu.querySelectorAll('.cdrop-item:not(.empty)').forEach(el=>{
+    el.onclick=()=>{
+      const v = el.dataset.val || '';
+      onPick(v);
+      closeAllCDrops();
+    };
+  });
+}
+
 function refillFilters(){
   const y=curDate.getFullYear(),m=curDate.getMonth();
   const mt=allTrades.filter(t=>t.closingYear===y&&t.closingMonth===m+1);
-  const cs=G('fSym').value,cc=G('fChn').value,cl=G('fLbl').value;
-  if(!uniq(mt,'symbol').includes(cs))G('fSym').value='';
-  if(!uniq(mt,'channel').includes(cc))G('fChn').value='';
-  if(!uniq(mt,'label').includes(cl))G('fLbl').value='';
-  refillSel(G('fSym'),'Símbolo',uniq(mt.filter(t=>(!cc||t.channel===cc)&&(!cl||t.label===cl)),'symbol'));
-  refillSel(G('fChn'),'Canal',  uniq(mt.filter(t=>(!cs||t.symbol===cs)&&(!cl||t.label===cl)),'channel'));
-  refillSel(G('fLbl'),'Label',  uniq(mt.filter(t=>(!cs||t.symbol===cs)&&(!cc||t.channel===cc)),'label'));
+  // reset values that no longer exist in current month data
+  if(fSymVal && !uniq(mt,'symbol').includes(fSymVal)) fSymVal='';
+  if(fChnVal && !uniq(mt,'channel').includes(fChnVal)) fChnVal='';
+  if(fLblVal && !uniq(mt,'label').includes(fLblVal)) fLblVal='';
+
+  const syms = uniq(mt.filter(t=>(!fChnVal||t.channel===fChnVal)&&(!fLblVal||t.label===fLblVal)),'symbol');
+  const chns = uniq(mt.filter(t=>(!fSymVal||t.symbol===fSymVal)&&(!fLblVal||t.label===fLblVal)),'channel');
+  const lbls = uniq(mt.filter(t=>(!fSymVal||t.symbol===fSymVal)&&(!fChnVal||t.channel===fChnVal)),'label');
+
+  buildFilterMenu('fSymMenu','fSymLabel',syms,fSymVal,'Símbolo', v=>{fSymVal=v;refillFilters();G('dv').classList.add('hidden');G('mv').classList.remove('hidden');renderMonth();});
+  buildFilterMenu('fChnMenu','fChnLabel',chns,fChnVal,'Canal',   v=>{fChnVal=v;refillFilters();G('dv').classList.add('hidden');G('mv').classList.remove('hidden');renderMonth();});
+  buildFilterMenu('fLblMenu','fLblLabel',lbls,fLblVal,'Label',   v=>{fLblVal=v;refillFilters();G('dv').classList.add('hidden');G('mv').classList.remove('hidden');renderMonth();});
 }
-function filtered(){return allTrades.filter(t=>{if(G('fSym').value&&t.symbol!==G('fSym').value)return false;if(G('fChn').value&&t.channel!==G('fChn').value)return false;if(G('fLbl').value&&t.label!==G('fLbl').value)return false;return true;});}
+function filtered(){return allTrades.filter(t=>{if(fSymVal&&t.symbol!==fSymVal)return false;if(fChnVal&&t.channel!==fChnVal)return false;if(fLblVal&&t.label!==fLblVal)return false;return true;});}
 function mTrades(y,m){return filtered().filter(t=>t.closingYear===y&&t.closingMonth===m+1).sort((a,b)=>a.closingTime-b.closingTime);}
 
 // ── CALENDÁRIO ────────────────────────────────────────────────
@@ -612,13 +714,13 @@ function openDay(k,di){
 G('prev').onclick=()=>{curDate=new Date(curDate.getFullYear(),curDate.getMonth()-1,1);refillFilters();renderMonth();};
 G('next').onclick=()=>{curDate=new Date(curDate.getFullYear(),curDate.getMonth()+1,1);refillFilters();renderMonth();};
 G('cur').onclick=()=>{const n=new Date();curDate=new Date(n.getFullYear(),n.getMonth(),1);refillFilters();renderMonth();};
-G('fClr').onclick=()=>{G('fSym').value='';G('fChn').value='';G('fLbl').value='';refillFilters();renderMonth();};
+G('fClr').onclick=()=>{fSymVal='';fChnVal='';fLblVal='';refillFilters();renderMonth();};
 G('back').onclick=()=>{G('dv').classList.add('hidden');G('mv').classList.remove('hidden');};
-[G('fSym'),G('fChn'),G('fLbl')].forEach(s=>s.addEventListener('change',()=>{refillFilters();G('dv').classList.add('hidden');G('mv').classList.remove('hidden');renderMonth();}));
+// filtros agora usam custom dropdown (handlers em refillFilters)
+
 G('btnLoad').onclick=()=>{
-  const i=parseInt(G('acctSel').value);
-  if(isNaN(i))return;
-  loadAcctProfile(i);
+  if(acctSelIdx<0)return;
+  loadAcctProfile(acctSelIdx);
 };
 G('btnCfg').onclick=()=>{openCfg();renderSavedAcctsList();};
 G('btnClose').onclick=()=>G('sp').classList.add('hidden');
@@ -637,6 +739,24 @@ G('xlsUpload').addEventListener('change',e=>{
   };
   fr.readAsArrayBuffer(e.target.files[0]);e.target.value='';
 });
+
+// ── CUSTOM DROPDOWN OPEN/CLOSE ────────────────────────────────
+function wireCDrop(btnId, menuId){
+  G(btnId).onclick = (e)=>{
+    e.stopPropagation();
+    const menu=G(menuId);
+    const wasOpen=menu.classList.contains('open');
+    closeAllCDrops();
+    if(!wasOpen) menu.classList.add('open');
+  };
+}
+wireCDrop('acctDropBtn','acctDropMenu');
+wireCDrop('fSymBtn','fSymMenu');
+wireCDrop('fChnBtn','fChnMenu');
+wireCDrop('fLblBtn','fLblMenu');
+document.addEventListener('click',()=>closeAllCDrops());
+// impede que clique dentro do menu feche
+document.querySelectorAll('.cdrop-menu').forEach(m=>m.addEventListener('click',e=>e.stopPropagation()));
 
 // ── INIT ──────────────────────────────────────────────────────
 renderMonth();renderAcctDropdown();
