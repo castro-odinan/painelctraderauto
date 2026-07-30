@@ -929,6 +929,10 @@ function analyzeTrades(trades, y, m){
 
   for(const k of dayKeys){
     const dayEvs=byDay.get(k)||[];
+    const dInfo=dayMap.get(k);
+    // Chain LOCAL ao dia — começa do saldo real de abertura do dia (dInfo.s0) e reseta a cada dia,
+    // pra pctD refletir o efeito de um depósito/saque que caia ENTRE dois trades do mesmo dia.
+    let dayChainProduct=1, dayChainPeriodStart=dInfo.s0, dayChainEquity=dInfo.s0;
     for(const ev of dayEvs){
       if(ev.kind==='cf'){
         if(useApi){
@@ -936,6 +940,9 @@ function analyzeTrades(trades, y, m){
           if(Math.abs(runPeriodStart)>CF_EPS) runProduct*=(runEquity/runPeriodStart);
           runEquity+=ev.c.delta;
           runPeriodStart=runEquity;
+          if(Math.abs(dayChainPeriodStart)>CF_EPS) dayChainProduct*=(dayChainEquity/dayChainPeriodStart);
+          dayChainEquity+=ev.c.delta;
+          dayChainPeriodStart=dayChainEquity;
         }
         // no fallback (!useApi) os CFs já estão embutidos na descontinuidade dos trades
       } else {
@@ -955,19 +962,28 @@ function analyzeTrades(trades, y, m){
             runPeriodStart=balBefore;
             runEquity=balBefore;
           }
+          if(Math.abs(balBefore-dayChainEquity)>CF_EPS){
+            if(Math.abs(dayChainPeriodStart)>CF_EPS) dayChainProduct*=(dayChainEquity/dayChainPeriodStart);
+            dayChainPeriodStart=balBefore;
+            dayChainEquity=balBefore;
+          }
         }
         runEquity+=t.net;
+        dayChainEquity+=t.net;
       }
     }
     let dayProduct=runProduct;
     if(runStarted && Math.abs(runPeriodStart)>CF_EPS){
       dayProduct=runProduct*(runEquity/runPeriodStart);
     }
+    let pctDFactor=dayChainProduct;
+    if(Math.abs(dayChainPeriodStart)>CF_EPS){
+      pctDFactor=dayChainProduct*(dayChainEquity/dayChainPeriodStart);
+    }
     const d=dayMap.get(k);
-    const pctD=d.s0&&Math.abs(d.s0)>CF_EPS?(d.net/d.s0)*100:0;
     dm.set(k,{
       net:d.net, sf:d.sf, s0:d.s0, cf:d.cf,
-      pctD, pctA:(dayProduct-1)*100,
+      pctD:(pctDFactor-1)*100, pctA:(dayProduct-1)*100,
       wins:d.tr.filter(t=>t.net>0).length,
       losses:d.tr.filter(t=>t.net<=0).length,
       count:d.tr.length, trades:d.tr
