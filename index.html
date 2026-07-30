@@ -517,6 +517,13 @@ function moneyDigits(v, digits){
   if(!isFinite(d) || d<0) return n/100;
   return n / Math.pow(10, d);
 }
+// Offset do servidor/sessão (UTC+2) — mesmo usado nos trades
+const BROKER_OFFSET_MS=7200000;
+function brokerParts(ms){
+  const d=new Date(Number(ms)+BROKER_OFFSET_MS);
+  const year=d.getUTCFullYear(), month=d.getUTCMonth()+1, day=d.getUTCDate();
+  return {year,month,day, key:`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`};
+}
 function normCashFlow(c){
   if(!c) return null;
   const ts=Number(c.changeBalanceTimestamp||0);
@@ -529,16 +536,16 @@ function normCashFlow(c){
   const isDp = op===0 || op==='0' || opStr.includes('DEPOSIT');
   if(isWd) delta=-Math.abs(delta);
   else if(isDp) delta=Math.abs(delta);
-  const dt=new Date(ts);
+  const bp=brokerParts(ts);
   return {
     id:String(c.balanceHistoryId||ts),
-    time:dt,
+    time:new Date(ts),
     timestamp:ts,
     delta,
     balance:moneyDigits(c.balance, digits),
-    year:dt.getUTCFullYear(),
-    month:dt.getUTCMonth()+1,
-    day:dt.getUTCDate(),
+    year:bp.year,
+    month:bp.month,
+    day:bp.day,
     note:c.externalNote||'',
     opType:op
   };
@@ -794,13 +801,14 @@ function analyzeTrades(trades, y, m){
   const apiCF = (y!=null && m!=null) ? monthCashFlows(y,m) : [];
   const useApi = apiCF.length>0;
 
+  // Timeline unificada (mesmo fuso nos dois tipos de evento)
   const events=[];
   for(const t of sorted){
-    events.push({kind:'trade', time:t.closingTime.getTime(), t});
+    events.push({kind:'trade', time:t.closingTime.getTime(), t, key:`${t.closingYear}-${String(t.closingMonth).padStart(2,'0')}-${String(t.closingDay).padStart(2,'0')}`});
   }
   if(useApi){
     for(const c of apiCF){
-      events.push({kind:'cf', time:c.timestamp, c});
+      events.push({kind:'cf', time:c.timestamp, c, key:`${c.year}-${String(c.month).padStart(2,'0')}-${String(c.day).padStart(2,'0')}`});
     }
   }
   events.sort((a,b)=>{
@@ -815,7 +823,12 @@ function analyzeTrades(trades, y, m){
   let periodStart=si;
   let equity=si;
   let lastBal=si;
-  const dayMap=new Map();
+  const dayMap=new Map(); // k -> {net,tr,cf,s0,sf}
+
+  function ensureDay(k, s0, sf){
+    if(!dayMap.has(k)) dayMap.set(k,{net:0,tr:[],cf:0,s0:s0,sf:sf});
+    return dayMap.get(k);
+  }
 
   if(!useApi){
     let prevBal=null;
@@ -832,17 +845,14 @@ function analyzeTrades(trades, y, m){
         }
       }
       const k=`${t.closingYear}-${String(t.closingMonth).padStart(2,'0')}-${String(t.closingDay).padStart(2,'0')}`;
-      if(!dayMap.has(k)) dayMap.set(k,{net:0,tr:[],cf:0,s0:balBefore,sf:t.balance});
-      const d=dayMap.get(k);
+      const d=ensureDay(k, balBefore, t.balance);
       d.net+=t.net; d.tr.push(t); d.cf+=cf; d.sf=t.balance;
       prevBal=t.balance;
       lastBal=t.balance;
     }
     if(prevBal!==null && Math.abs(periodStart)>CF_EPS) product*=(prevBal/periodStart);
   } else {
-    // SI (balBefore do 1º trade) JÁ inclui depósitos feitos antes do 1º trade.
-    // Por isso CFs anteriores ao 1º trade entram só no total dep/saq (display),
-    // não são somados de novo no equity do TWR (evita dobrar o depósito).
+    // Totais de cash flow (display)
     for(const c of apiCF){
       if(c.delta>CF_EPS) deposits+=c.delta;
       else if(c.delta<-CF_EPS) withdrawals+=c.delta;
@@ -852,42 +862,46 @@ function analyzeTrades(trades, y, m){
     equity=si;
     periodStart=si;
     lastBal=si;
+
     for(const ev of events){
       if(ev.kind==='cf'){
         const c=ev.c;
-        // CF antes ou no instante do 1º trade: já refletido no SI
+        const k=ev.key;
+        // CF antes do 1º trade: já está no SI — não reaplica no equity/TWR
         if(!started || c.timestamp<=firstTradeTime){
-          const k=`${c.year}-${String(c.month).padStart(2,'0')}-${String(c.day).padStart(2,'0')}`;
-          if(!dayMap.has(k)) dayMap.set(k,{net:0,tr:[],cf:0,s0:si,sf:c.balance!=null?c.balance:si});
-          dayMap.get(k).cf+=c.delta;
-          if(c.balance!=null) dayMap.get(k).sf=c.balance;
-          // Se ainda não houve trade, atualiza lastBal pelo cash
+          const d=ensureDay(k, si, c.balance!=null?c.balance:si);
+          d.cf+=c.delta;
+          // não sobrescreve sf se o dia já tiver trades (sf dos trades manda)
+          if(!d.tr.length && c.balance!=null) d.sf=c.balance;
           if(!started && c.balance!=null) lastBal=c.balance;
           continue;
         }
-        // CF entre trades ou após último trade → fecha sub-período e aplica
+        // CF no meio / depois → corta sub-período do TWR
         if(Math.abs(periodStart)>CF_EPS) product*=(equity/periodStart);
         equity+=c.delta;
         periodStart=equity;
         lastBal=c.balance!=null?c.balance:equity;
-        const k=`${c.year}-${String(c.month).padStart(2,'0')}-${String(c.day).padStart(2,'0')}`;
-        if(!dayMap.has(k)) dayMap.set(k,{net:0,tr:[],cf:0,s0:equity-c.delta,sf:lastBal});
-        dayMap.get(k).cf+=c.delta;
-        dayMap.get(k).sf=lastBal;
+        const d=ensureDay(k, equity-c.delta, lastBal);
+        d.cf+=c.delta;
+        if(!d.tr.length) d.sf=lastBal; // só atualiza sf do dia se ainda não houve trade no dia
+        else {
+          // houve trade no dia: sf continua sendo o do último trade,
+          // a menos que este CF seja DEPOIS do último trade do dia
+          const lastT=d.tr[d.tr.length-1];
+          if(c.timestamp>=lastT.closingTime.getTime()) d.sf=lastBal;
+        }
       } else {
         const t=ev.t;
         const balBefore=t.balance-t.net;
         if(!started){
-          // Ancora no SI real (já com depósitos pré-trade)
           equity=balBefore;
           periodStart=balBefore;
           started=true;
         }
         equity+=t.net;
         lastBal=t.balance;
-        const k=`${t.closingYear}-${String(t.closingMonth).padStart(2,'0')}-${String(t.closingDay).padStart(2,'0')}`;
-        if(!dayMap.has(k)) dayMap.set(k,{net:0,tr:[],cf:0,s0:balBefore,sf:t.balance});
-        const d=dayMap.get(k);
+        const k=ev.key;
+        const d=ensureDay(k, balBefore, t.balance);
         if(!d.tr.length) d.s0=balBefore;
         d.net+=t.net; d.tr.push(t); d.sf=t.balance;
       }
@@ -900,73 +914,64 @@ function analyzeTrades(trades, y, m){
   const twr=(product-1)*100;
   const totalCF=deposits+withdrawals;
 
-  let runProduct=1, runPeriodStart=si, runEquity=si, runStarted=false;
+  // ── % acumulada (TWR) por dia: percorre events na ordem, snapshot ao fim de cada dia ──
   const dm=new Map();
   const dayKeys=[...dayMap.keys()].sort();
+  // Mapa dia -> eventos daquele dia (chave já unificada)
+  const byDay=new Map();
+  for(const ev of events){
+    if(!byDay.has(ev.key)) byDay.set(ev.key,[]);
+    byDay.get(ev.key).push(ev);
+  }
 
-  if(!useApi){
-    let prevBal=null;
-    runPeriodStart=si;
-    for(const k of dayKeys){
-      const dayTrades=dayMap.get(k).tr;
-      for(const t of dayTrades){
-        const balBefore=t.balance-t.net;
-        if(prevBal!==null){
-          const raw=balBefore-prevBal;
-          if(Math.abs(raw)>CF_EPS){
-            if(Math.abs(runPeriodStart)>CF_EPS) runProduct*=(prevBal/runPeriodStart);
-            runPeriodStart=balBefore;
-          }
-        }
-        prevBal=t.balance;
-      }
-      let dayProduct=runProduct;
-      if(prevBal!==null && Math.abs(runPeriodStart)>CF_EPS) dayProduct=runProduct*(prevBal/runPeriodStart);
-      const d=dayMap.get(k);
-      const pctD=d.s0&&Math.abs(d.s0)>CF_EPS?(d.net/d.s0)*100:0;
-      dm.set(k,{
-        net:d.net,sf:d.sf,s0:d.s0,cf:d.cf,pctD,pctA:(dayProduct-1)*100,
-        wins:d.tr.filter(t=>t.net>0).length,
-        losses:d.tr.filter(t=>t.net<=0).length,
-        count:d.tr.length,trades:d.tr
-      });
-    }
-  } else {
-    const firstTradeTime=sorted[0].closingTime.getTime();
-    const byDay=new Map();
-    for(const ev of events){
-      const dt=new Date(ev.time);
-      const k=`${dt.getUTCFullYear()}-${String(dt.getUTCMonth()+1).padStart(2,'0')}-${String(dt.getUTCDate()).padStart(2,'0')}`;
-      if(!byDay.has(k)) byDay.set(k,[]);
-      byDay.get(k).push(ev);
-    }
-    runEquity=si; runPeriodStart=si; runStarted=false;
-    for(const k of [...byDay.keys()].sort()){
-      for(const ev of byDay.get(k)){
-        if(ev.kind==='cf'){
-          // CF pré-1º trade já está no SI — não reaplica no TWR
+  let runProduct=1, runPeriodStart=si, runEquity=si, runStarted=false;
+  const firstTradeTime=sorted[0].closingTime.getTime();
+
+  for(const k of dayKeys){
+    const dayEvs=byDay.get(k)||[];
+    for(const ev of dayEvs){
+      if(ev.kind==='cf'){
+        if(useApi){
           if(!runStarted || ev.c.timestamp<=firstTradeTime) continue;
           if(Math.abs(runPeriodStart)>CF_EPS) runProduct*=(runEquity/runPeriodStart);
           runEquity+=ev.c.delta;
           runPeriodStart=runEquity;
-        } else {
-          const t=ev.t;
-          const balBefore=t.balance-t.net;
-          if(!runStarted){runPeriodStart=balBefore;runEquity=balBefore;runStarted=true;}
-          runEquity+=t.net;
         }
+        // no fallback (!useApi) os CFs já estão embutidos na descontinuidade dos trades
+      } else {
+        const t=ev.t;
+        const balBefore=t.balance-t.net;
+        if(!runStarted){
+          runPeriodStart=balBefore;
+          runEquity=balBefore;
+          runStarted=true;
+        }
+        if(!useApi){
+          // descontinuidade entre trades (cash flow implícito)
+          // (runEquity deve ser o balance do trade anterior = prev)
+          // simplificação: ao entrar no trade, se balBefore != runEquity → CF
+          if(Math.abs(balBefore-runEquity)>CF_EPS){
+            if(Math.abs(runPeriodStart)>CF_EPS) runProduct*=(runEquity/runPeriodStart);
+            runPeriodStart=balBefore;
+            runEquity=balBefore;
+          }
+        }
+        runEquity+=t.net;
       }
-      let dayProduct=runProduct;
-      if(runStarted && Math.abs(runPeriodStart)>CF_EPS) dayProduct=runProduct*(runEquity/runPeriodStart);
-      const d=dayMap.get(k)||{net:0,tr:[],cf:0,s0:0,sf:0};
-      const pctD=d.s0&&Math.abs(d.s0)>CF_EPS?(d.net/d.s0)*100:0;
-      dm.set(k,{
-        net:d.net,sf:d.sf,s0:d.s0,cf:d.cf||0,pctD,pctA:(dayProduct-1)*100,
-        wins:(d.tr||[]).filter(t=>t.net>0).length,
-        losses:(d.tr||[]).filter(t=>t.net<=0).length,
-        count:(d.tr||[]).length,trades:d.tr||[]
-      });
     }
+    let dayProduct=runProduct;
+    if(runStarted && Math.abs(runPeriodStart)>CF_EPS){
+      dayProduct=runProduct*(runEquity/runPeriodStart);
+    }
+    const d=dayMap.get(k);
+    const pctD=d.s0&&Math.abs(d.s0)>CF_EPS?(d.net/d.s0)*100:0;
+    dm.set(k,{
+      net:d.net, sf:d.sf, s0:d.s0, cf:d.cf,
+      pctD, pctA:(dayProduct-1)*100,
+      wins:d.tr.filter(t=>t.net>0).length,
+      losses:d.tr.filter(t=>t.net<=0).length,
+      count:d.tr.length, trades:d.tr
+    });
   }
 
   return {si,sf,net,twr,deposits,withdrawals,totalCF,dm,useApi};
