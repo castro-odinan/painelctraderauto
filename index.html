@@ -999,7 +999,32 @@ function renderMonth(){
   const mt=mTrades(y,m);
   const hasFilter=!!(fSymVal||fChnVal||fLblVal);
   const monthCF=monthCashFlows(y,m);
+  // TWR acumulado deve encadear o histórico INTEIRO da conta (igual Excel),
+  // não reiniciar no 1º dia do mês. pctD continua sendo só do dia.
+  const allForAcum = filtered().slice().sort((a,b)=>{
+    const dt=a.closingTime-b.closingTime;
+    if(dt!==0) return dt;
+    return String(a.id).localeCompare(String(b.id));
+  });
+  // Analisa histórico completo (sem filtro de mês) só para obter pctA por dia
+  const globalAnalyzed = allForAcum.length ? analyzeTrades(allForAcum, null, null) : null;
+  const globalPctA = new Map(); // k -> pctA
+  if(globalAnalyzed && globalAnalyzed.dm){
+    for(const [k,v] of globalAnalyzed.dm) globalPctA.set(k, v.pctA);
+  }
+  // Análise do mês (para net, saldo, pctD, trades do dia)
   const analyzed=mt.length ? analyzeTrades(mt,y,m) : null;
+  // Sobrescreve pctA de cada dia do mês com o valor do histórico global
+  if(analyzed && analyzed.dm){
+    for(const [k,v] of analyzed.dm){
+      if(globalPctA.has(k)) v.pctA = globalPctA.get(k);
+    }
+  }
+  // TWR do resumo do mês = pctA do último dia com trade no mês (histórico global)
+  if(analyzed && analyzed.dm && analyzed.dm.size){
+    const lastKey = [...analyzed.dm.keys()].sort().pop();
+    if(globalPctA.has(lastKey)) analyzed.twr = globalPctA.get(lastKey);
+  }
 
   if(analyzed){
     const a=analyzed;
